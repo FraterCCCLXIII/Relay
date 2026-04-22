@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/config.ts","./src/demoactor.tsx","./src/main.tsx","./src/userelay.ts","./src/vite-env.d.ts","./src/pages/actorpage.tsx","./src/pages/channelpage.tsx","./src/pages/channelslist.tsx","./src/pages/diagnostics.tsx","./src/pages/landing.tsx","./src/pages/postdetail.tsx","./src/pages/publisher.tsx","./src/pages/readerhome.tsx"],"version":"5.9.3"}

@@ -1,0 +1,20 @@
+{
+  "name": "relay-mvp",
+  "private": true,
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "build": "pnpm -r run build",
+    "dev:origin": "pnpm --filter @relay-mvp/origin dev",
+    "dev:relay": "pnpm --filter @relay-mvp/relay dev",
+    "dev:indexer": "pnpm --filter @relay-mvp/indexer dev",
+    "dev:web": "pnpm --filter @relay-mvp/web dev",
+    "dev": "concurrently -n origin,relay,indexer,web -c blue,magenta,green,yellow \"pnpm dev:origin\" \"pnpm dev:relay\" \"pnpm dev:indexer\" \"pnpm dev:web\"",
+    "db:migrate": "pnpm --filter @relay-mvp/origin db:migrate",
+    "db:seed": "pnpm --filter @relay-mvp/origin db:seed",
+    "typecheck": "pnpm -r run typecheck"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0",
+    "typescript": "^5.7.2"
+  }
+}

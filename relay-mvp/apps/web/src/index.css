@@ -1,0 +1,18 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Avoid @apply + dark: here — some Vite/Tailwind dev pipelines throw and return 500 for /src/index.css */
+body {
+  margin: 0;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  color: #0f1419;
+  background-color: #ffffff;
+}
+
+html.dark body {
+  color: #e7e9ea;
+  background-color: #000000;
+}

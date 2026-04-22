@@ -1,0 +1,14 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: relay
+      POSTGRES_PASSWORD: relay
+      POSTGRES_DB: relay_mvp
+    ports:
+      - "5432:5432"
+    volumes:
+      - relay_pg:/var/lib/postgresql/data
+
+volumes:
+  relay_pg:
