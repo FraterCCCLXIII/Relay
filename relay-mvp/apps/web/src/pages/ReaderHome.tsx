@@ -66,7 +66,9 @@ export function ReaderHome() {
     void load();
   }, [load]);
 
-  const { connected, lastEvent, setRefresh, disconnectRelay, reconnectRelay } = useRelay(myId, !relayPaused);
+  const { connected, lastEvent, setRefresh, disconnectRelay, reconnectRelay } = useRelay(myId, !relayPaused, {
+    actorSlug: slug,
+  });
 
   useEffect(() => {
     setRefresh(load);

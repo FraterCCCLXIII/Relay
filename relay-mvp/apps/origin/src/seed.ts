@@ -16,6 +16,7 @@ import {
 import type { PoolClient } from "pg";
 import { pool } from "./db.js";
 import { randomUUID } from "node:crypto";
+import { encryptChannelSecret } from "./logic/channelCrypto.js";
 
 ed.etc.sha512Sync = (...m: Uint8Array[]) => sha512(ed.etc.concatBytes(...m));
 
@@ -102,12 +103,15 @@ async function main() {
   const channelDevId = channelIdFromSeed("relay-demo-dev");
   const channelLoungeId = channelIdFromSeed("relay-demo-lounge");
   const channelAnnounceId = channelIdFromSeed("relay-demo-announcements");
+  const channelPrivateLoungeId = channelIdFromSeed("relay-demo-private-lounge");
+  /** Grep this string in channel_secrets tests to verify it never appears in plaintext in the DB. */
+  const privateWelcomePlaintext = "SEED-PRIVATE-CHANNEL-MESSAGE-MVP-TEST";
 
   const c = await pool.connect();
   try {
     await c.query("BEGIN");
     await c.query(
-      "TRUNCATE labels, channel_refs, channels, follows, reactions, log_events, state_objects, identity_docs, actors CASCADE",
+      "TRUNCATE channel_invites, channel_members, channel_e2e_wrapped_keys, channel_secrets, labels, channel_refs, channels, local_accounts, oauth_accounts, auth_sessions, follows, reactions, log_events, state_objects, identity_docs, federation_peers, audit_log, actors CASCADE",
     );
 
     for (const row of [
@@ -296,10 +300,31 @@ async function main() {
     ];
     for (const [ch, owner, title, desc] of channelRows) {
       await c.query(
-        "INSERT INTO channels (channel_id, owner_actor_id, title, description, created_at) VALUES ($1,$2,$3,$4,$5::timestamptz)",
+        "INSERT INTO channels (channel_id, owner_actor_id, title, description, created_at, visibility) VALUES ($1,$2,$3,$4,$5::timestamptz,'public')",
         [ch, owner, title, desc, now],
       );
     }
+
+    await c.query(
+      `INSERT INTO channels (channel_id, owner_actor_id, title, description, created_at, visibility)
+       VALUES ($1,$2,$3,$4,$5::timestamptz,'private')`,
+      [channelPrivateLoungeId, aliceId, "Private lounge (seed)", "Members only — used by CLI private-channel tests.", now],
+    );
+    await c.query("INSERT INTO channel_members (channel_id, actor_id, role) VALUES ($1, $2, 'member')", [
+      channelPrivateLoungeId,
+      modId,
+    ]);
+    const { ciphertext, iv } = encryptChannelSecret(privateWelcomePlaintext, channelPrivateLoungeId);
+    await c.query("INSERT INTO channel_secrets (channel_id, ciphertext, iv) VALUES ($1, $2, $3)", [
+      channelPrivateLoungeId,
+      ciphertext,
+      iv,
+    ]);
+    await c.query("INSERT INTO channel_refs (channel_id, post_object_id, submitter_actor_id) VALUES ($1, $2, $3)", [
+      channelPrivateLoungeId,
+      postHttp,
+      aliceId,
+    ]);
 
     const ref = (ch: string, pid: string, submitter: string) =>
       c.query("INSERT INTO channel_refs (channel_id, post_object_id, submitter_actor_id) VALUES ($1,$2,$3)", [ch, pid, submitter]);
@@ -349,6 +374,7 @@ async function main() {
   console.log("  channel (Protocol & dev):", channelDevId);
   console.log("  channel (Water cooler):", channelLoungeId);
   console.log("  channel (Announcements):", channelAnnounceId);
+  console.log("  channel (Private lounge — seed, members alice+mod, bob excluded):", channelPrivateLoungeId);
   console.log("\nSave these in apps/web .env if you need fixed IDs (optional).");
   await pool.end();
 }

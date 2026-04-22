@@ -1,18 +1,59 @@
 import "express-async-errors";
 import cors from "cors";
 import express, { type Express } from "express";
-import { randomUUID } from "node:crypto";
-import { canonicalStringify, stubSignature, type ConflictErrorBody, type LogEventEnvelope } from "@relay-mvp/protocol";
+import { randomUUID, createHmac, createHash, randomBytes } from "node:crypto";
+import { canonicalStringify, channelIdFromSeed, stubSignature, type ConflictErrorBody, type LogEventEnvelope } from "@relay-mvp/protocol";
 import { pool } from "./db.js";
-import { requireActor, resolveDemoActor } from "./demoActor.js";
+import {
+  demoHeaderAllowed,
+  getSessionIdFromRequest,
+  requireActor,
+  resolveActor,
+  SESSION_COOKIE,
+} from "./demoActor.js";
+import { httpsigRequired, routeNeedsHttpsig, verifyHttpsigForActor } from "./httpsig.js";
+import { canViewPrivateChannel, isChannelOwner } from "./logic/channelAccess.js";
+import { decryptChannelSecret, encryptChannelSecret } from "./logic/channelCrypto.js";
 import { appendLog, getLogHead } from "./logic/appendLog.js";
 import { stateRowToObject } from "./logic/stateRowToObject.js";
 import { publishToRelay } from "./relayPublish.js";
+import { addFullAuthRoutes } from "./auth/fullAuthRoutes.js";
+import { createRelayWebSession } from "./auth/webSession.js";
 
 export function createApp(): Express {
   const app = express();
-  app.use(cors());
-  app.use(express.json({ limit: "2mb" }));
+  const RELAY_HELLO_SECRET = process.env.RELAY_HELLO_SECRET ?? "relay-hello-dev";
+  const RELAY_HELLO_BUCKET_MS = 5 * 60 * 1000;
+  const relayHelloBucket = (t = Date.now()) => Math.floor(t / RELAY_HELLO_BUCKET_MS) * RELAY_HELLO_BUCKET_MS;
+  const relayHelloToken = (actorId: string, bucket: number) =>
+    createHmac("sha256", RELAY_HELLO_SECRET).update(`${actorId}\n${bucket}`).digest("hex");
+
+  app.use(cors({ origin: true, credentials: true }));
+  app.use(
+    express.json({
+      limit: "2mb",
+      verify: (req, _res, buf) => {
+        (req as express.Request & { rawBody?: Buffer }).rawBody = buf;
+      },
+    }),
+  );
+
+  if (httpsigRequired()) {
+    app.use(async (req, res, next) => {
+      if (!routeNeedsHttpsig(req)) return next();
+      const actorId = await resolveActor(req);
+      if (!actorId) {
+        return res.status(401).json({ error: "httpsig_requires_auth" });
+      }
+      const ok = await verifyHttpsigForActor(
+        req as express.Request & { rawBody?: Buffer },
+        res,
+        actorId,
+      );
+      if (!ok) return;
+      next();
+    });
+  }
 
   // Browsers only request path "/"; the hash in ...:3001/#/health is not sent. Redirect helps mistaken bookmarks.
   app.get("/", (_req, res) => res.redirect(302, "/health"));
@@ -31,6 +72,125 @@ export function createApp(): Express {
       return;
     }
     res.json(body);
+  });
+
+  app.post("/auth/login", async (req, res) => {
+    const { slug } = req.body as { slug?: string };
+    if (!slug) return res.status(400).json({ error: "invalid_body" });
+    const r = await pool.query<{ actor_id: string; slug: string }>(
+      "SELECT actor_id, slug FROM actors WHERE LOWER(slug) = LOWER($1)",
+      [slug.trim()],
+    );
+    if (!r.rows[0]) return res.status(404).json({ error: "unknown_actor" });
+    await createRelayWebSession(res, r.rows[0].actor_id);
+    res.json({ ok: true, actor_id: r.rows[0].actor_id, slug: r.rows[0].slug });
+  });
+
+  app.post("/auth/logout", async (req, res) => {
+    const sid = getSessionIdFromRequest(req);
+    if (sid) await pool.query("DELETE FROM auth_sessions WHERE session_id = $1", [sid]);
+    res.setHeader("Set-Cookie", `${SESSION_COOKIE}=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax`);
+    res.json({ ok: true });
+  });
+
+  app.get("/auth/me", async (req, res) => {
+    const aid = await resolveActor(req);
+    if (!aid) return res.status(401).json({ error: "unauthorized" });
+    const r = await pool.query("SELECT slug FROM actors WHERE actor_id = $1", [aid]);
+    res.json({ actor_id: aid, slug: r.rows[0]?.slug });
+  });
+
+  addFullAuthRoutes(app);
+
+  /** Short-lived HMAC for relay HELLO; relay shares RELAY_HELLO_SECRET. */
+  app.get("/auth/relay-ws", async (req, res) => {
+    let aid = await resolveActor(req);
+    if (!aid) {
+      const slug = (req.query.actor_slug as string | undefined)?.trim();
+      if (slug && demoHeaderAllowed()) {
+        const r = await pool.query<{ actor_id: string }>(
+          "SELECT actor_id FROM actors WHERE LOWER(slug) = LOWER($1)",
+          [slug],
+        );
+        aid = r.rows[0]?.actor_id ?? null;
+      }
+    }
+    if (!aid) return res.status(401).json({ error: "unauthorized" });
+    const bucket = relayHelloBucket();
+    res.json({ actor_id: aid, hello_bucket: bucket, demo_token: relayHelloToken(aid, bucket) });
+  });
+
+  app.get("/.well-known/relay", (_req, res) => {
+    res.json({
+      version: "0.1",
+      name: "relay-mvp",
+      links: { actors: "/actors", home_feed: "/feed/home" },
+    });
+  });
+
+  app.get("/federation/resolve", async (req, res) => {
+    const base = (req.query.origin_url as string | undefined)?.trim();
+    const slug = (req.query.slug as string | undefined)?.trim().toLowerCase();
+    if (!base || !slug) {
+      return res.status(400).json({ error: "origin_url and slug required" });
+    }
+    const allowed = await pool.query("SELECT 1 FROM federation_peers WHERE origin_url = $1", [base]);
+    if (allowed.rowCount === 0) {
+      return res.status(403).json({ error: "origin_not_trusted" });
+    }
+    const u = new URL("/actors", base.endsWith("/") ? base : `${base}/`);
+    const ac = new AbortController();
+    const t = setTimeout(() => ac.abort(), 8_000);
+    let remote: { actor_id: string; slug: string } | undefined;
+    try {
+      const r = await fetch(u, { signal: ac.signal });
+      if (!r.ok) return res.status(502).json({ error: "remote_fetch_failed", status: r.status });
+      const rows = (await r.json()) as Array<{ actor_id: string; slug: string }>;
+      remote = rows.find((x) => x.slug.toLowerCase() === slug);
+    } catch (e) {
+      return res.status(502).json({ error: "remote_unreachable", message: (e as Error).message });
+    } finally {
+      clearTimeout(t);
+    }
+    if (!remote) return res.status(404).json({ error: "actor_not_on_origin" });
+    res.json({ ...remote, origin: base });
+  });
+
+  const adminToken = process.env.RELAY_ADMIN_TOKEN;
+  if (adminToken) {
+    app.get("/admin/health", async (req, res) => {
+      if (req.header("x-admin-token") !== adminToken) return res.status(401).json({ error: "unauthorized" });
+      await pool.query("INSERT INTO audit_log (action, detail) VALUES ($1, $2::jsonb)", [
+        "admin.health",
+        JSON.stringify({ at: new Date().toISOString() }),
+      ]);
+      res.json({ ok: true, role: "admin", time: new Date().toISOString() });
+    });
+
+    app.post("/federation/peers", async (req, res) => {
+      if (req.header("x-admin-token") !== adminToken) return res.status(401).json({ error: "unauthorized" });
+      const { origin_url, label } = req.body as { origin_url?: string; label?: string };
+      if (!origin_url?.trim()) return res.status(400).json({ error: "origin_url required" });
+      const u = origin_url.replace(/\/$/, "");
+      await pool.query(
+        "INSERT INTO federation_peers (origin_url, label) VALUES ($1, $2) ON CONFLICT (origin_url) DO UPDATE SET label = EXCLUDED.label",
+        [u, label ?? null],
+      );
+      await pool.query("INSERT INTO audit_log (action, detail) VALUES ($1, $2::jsonb)", [
+        "federation.peer_upsert",
+        JSON.stringify({ origin_url: u }),
+      ]);
+      res.json({ ok: true, origin_url: u });
+    });
+  }
+
+  app.get("/internal/metrics", (req, res) => {
+    const tok = process.env.RELAY_INTERNAL_METRICS_TOKEN ?? process.env.RELAY_ADMIN_TOKEN;
+    if (!tok) return res.status(503).json({ error: "metrics_not_configured" });
+    if (req.header("x-admin-token") !== tok) return res.status(401).json({ error: "unauthorized" });
+    res.type("text/plain; version=0.0.4").send(
+      `# TYPE relay_mvp_info gauge\nrelay_mvp_info{version="0.1"} 1\n`,
+    );
   });
 
   app.get("/actors", async (_req, res) => {
@@ -56,7 +216,7 @@ export function createApp(): Express {
 
   /** Create/update state. Body: { schema, payload, expected_version?, storage_class?, content_class?, deleted? } */
   app.put("/actors/:actorId/state/:objectId", async (req, res) => {
-    const actorId = await resolveDemoActor(req);
+    const actorId = await resolveActor(req);
     if (!requireActor(actorId, res)) return;
     if (actorId !== req.params.actorId) {
       return res.status(403).json({ error: "actor_mismatch", message: "Cannot write another actor's state." });
@@ -207,7 +367,7 @@ export function createApp(): Express {
 
   /** Append log as authenticated actor (follows, reactions, channel events). */
   app.post("/actors/:actorId/log", async (req, res) => {
-    const actorId = await resolveDemoActor(req);
+    const actorId = await resolveActor(req);
     if (!requireActor(actorId, res)) return;
     if (actorId !== req.params.actorId) {
       return res.status(403).json({ error: "actor_mismatch" });
@@ -334,7 +494,7 @@ export function createApp(): Express {
       if (id && summaries[id]) summaries[id].reply_count = row.n as number;
     }
 
-    const me = await resolveDemoActor(req);
+    const me = await resolveActor(req);
     if (me) {
       const mine = await pool.query(
         `SELECT target_object_id FROM reactions
@@ -354,7 +514,7 @@ export function createApp(): Express {
    * Body: { target_object_id, action: "add" | "remove", reaction_kind?: "like" }
    */
   app.post("/actors/:actorId/reactions", async (req, res) => {
-    const actorId = await resolveDemoActor(req);
+    const actorId = await resolveActor(req);
     if (!requireActor(actorId, res)) return;
     if (actorId !== req.params.actorId) return res.status(403).json({ error: "actor_mismatch" });
 
@@ -448,7 +608,7 @@ export function createApp(): Express {
   });
 
   app.post("/actors/:actorId/follows", async (req, res) => {
-    const actorId = await resolveDemoActor(req);
+    const actorId = await resolveActor(req);
     if (!requireActor(actorId, res)) return;
     if (actorId !== req.params.actorId) return res.status(403).json({ error: "actor_mismatch" });
     const { followee_id } = req.body as { followee_id?: string };
@@ -485,7 +645,7 @@ export function createApp(): Express {
   });
 
   app.delete("/actors/:actorId/follows/:followeeId", async (req, res) => {
-    const actorId = await resolveDemoActor(req);
+    const actorId = await resolveActor(req);
     if (!requireActor(actorId, res)) return;
     await pool.query("DELETE FROM follows WHERE follower_id = $1 AND followee_id = $2", [
       actorId,
@@ -519,7 +679,7 @@ export function createApp(): Express {
   });
 
   app.get("/feed/home", async (req, res) => {
-    const actorId = await resolveDemoActor(req);
+    const actorId = await resolveActor(req);
     if (!requireActor(actorId, res)) return;
     const f = await pool.query("SELECT followee_id FROM follows WHERE follower_id = $1", [actorId]);
     const ids = [...new Set([actorId, ...f.rows.map((x) => x.followee_id)])];
@@ -535,24 +695,253 @@ export function createApp(): Express {
     });
   });
 
-  app.get("/channels", async (_req, res) => {
-    const r = await pool.query("SELECT channel_id, owner_actor_id, title, description, created_at FROM channels");
+  app.get("/channels", async (req, res) => {
+    const actorId = await resolveActor(req);
+    const r = await pool.query(
+      `SELECT c.channel_id, c.owner_actor_id, c.title, c.description, c.created_at, COALESCE(c.visibility, 'public') AS visibility
+       FROM channels c
+       WHERE c.visibility = 'public'
+         OR ($1::text IS NOT NULL AND (
+           c.owner_actor_id = $1
+           OR EXISTS (SELECT 1 FROM channel_members m WHERE m.channel_id = c.channel_id AND m.actor_id = $1)
+         ))
+       ORDER BY c.created_at`,
+      [actorId],
+    );
     res.json(r.rows);
   });
 
+  app.post("/channels", async (req, res) => {
+    const actorId = await resolveActor(req);
+    if (!requireActor(actorId, res)) return;
+    const { title, description, visibility, welcome_plaintext } = req.body as {
+      title?: string;
+      description?: string;
+      visibility?: string;
+      welcome_plaintext?: string;
+    };
+    if (!title || typeof title !== "string") {
+      return res.status(400).json({ error: "invalid_body", message: "title required" });
+    }
+    const vis = visibility === "private" ? "private" : "public";
+    const channelId = channelIdFromSeed(`prv-${randomBytes(12).toString("hex")}`);
+    const now = new Date().toISOString();
+    const c = await pool.connect();
+    try {
+      await c.query("BEGIN");
+      await c.query(
+        `INSERT INTO channels (channel_id, owner_actor_id, title, description, created_at, visibility)
+         VALUES ($1,$2,$3,$4,$5::timestamptz,$6)`,
+        [channelId, actorId, title, description ?? null, now, vis],
+      );
+      if (welcome_plaintext && typeof welcome_plaintext === "string" && welcome_plaintext.length > 0) {
+        const { ciphertext, iv } = encryptChannelSecret(welcome_plaintext, channelId);
+        await c.query("INSERT INTO channel_secrets (channel_id, ciphertext, iv) VALUES ($1,$2,$3)", [
+          channelId,
+          ciphertext,
+          iv,
+        ]);
+      }
+      await c.query("COMMIT");
+    } catch (e) {
+      await c.query("ROLLBACK");
+      throw e;
+    } finally {
+      c.release();
+    }
+    const ch = await pool.query("SELECT * FROM channels WHERE channel_id = $1", [channelId]);
+    res.status(201).json({ channel: ch.rows[0] });
+  });
+
   app.get("/channels/:channelId", async (req, res) => {
+    const actorId = await resolveActor(req);
     const ch = await pool.query("SELECT * FROM channels WHERE channel_id = $1", [req.params.channelId]);
     if (!ch.rows[0]) return res.status(404).json({ error: "not_found" });
+    const vis = (ch.rows[0].visibility as string) ?? "public";
+    if (vis === "private") {
+      const ok = await canViewPrivateChannel(req.params.channelId, actorId);
+      if (!ok) {
+        return res.status(403).json({ error: "forbidden", reason: "not_a_member", message: "Private channel: membership required on this origin." });
+      }
+    }
     const refs = await pool.query(
       `SELECT post_object_id, submitter_actor_id, created_at FROM channel_refs WHERE channel_id = $1 ORDER BY created_at DESC`,
       [req.params.channelId],
     );
-    res.json({ channel: ch.rows[0], refs: refs.rows });
+    const sec = await pool.query("SELECT ciphertext, iv FROM channel_secrets WHERE channel_id = $1", [req.params.channelId]);
+    let private_welcome_plaintext: string | undefined;
+    if (sec.rows[0] && (vis === "public" || (await canViewPrivateChannel(req.params.channelId, actorId)))) {
+      try {
+        private_welcome_plaintext = decryptChannelSecret(sec.rows[0].ciphertext, sec.rows[0].iv, req.params.channelId);
+      } catch {
+        private_welcome_plaintext = undefined;
+      }
+    }
+    res.json({ channel: ch.rows[0], refs: refs.rows, ...(private_welcome_plaintext ? { private_welcome_plaintext } : {}) });
+  });
+
+  app.post("/channels/:channelId/members", async (req, res) => {
+    const actorId = await resolveActor(req);
+    if (!requireActor(actorId, res)) return;
+    if (!(await isChannelOwner(req.params.channelId, actorId))) {
+      return res.status(403).json({ error: "forbidden", message: "Only the channel owner can add members." });
+    }
+    const { member_actor_id, member_slug } = req.body as { member_actor_id?: string; member_slug?: string };
+    let addId = member_actor_id;
+    if (!addId && member_slug) {
+      const a = await pool.query("SELECT actor_id FROM actors WHERE lower(slug) = lower($1)", [member_slug]);
+      if (!a.rows[0]) return res.status(400).json({ error: "unknown_member_slug" });
+      addId = a.rows[0].actor_id;
+    }
+    if (!addId) return res.status(400).json({ error: "invalid_body", message: "member_actor_id or member_slug required" });
+    await pool.query(
+      `INSERT INTO channel_members (channel_id, actor_id, role) VALUES ($1, $2, 'member') ON CONFLICT (channel_id, actor_id) DO NOTHING`,
+      [req.params.channelId, addId],
+    );
+    res.json({ ok: true, member_actor_id: addId });
+  });
+
+  app.delete("/channels/:channelId/members/:removeActorId", async (req, res) => {
+    const actorId = await resolveActor(req);
+    if (!requireActor(actorId, res)) return;
+    if (!(await isChannelOwner(req.params.channelId, actorId))) {
+      return res.status(403).json({ error: "forbidden", message: "Only the channel owner can remove members." });
+    }
+    const ch = await pool.query("SELECT owner_actor_id FROM channels WHERE channel_id = $1", [req.params.channelId]);
+    if (!ch.rows[0]) return res.status(404).json({ error: "not_found" });
+    if (ch.rows[0].owner_actor_id === req.params.removeActorId) {
+      return res.status(400).json({ error: "cannot_remove_owner" });
+    }
+    await pool.query("DELETE FROM channel_e2e_wrapped_keys WHERE channel_id = $1 AND actor_id = $2", [
+      req.params.channelId,
+      req.params.removeActorId,
+    ]);
+    await pool.query("DELETE FROM channel_members WHERE channel_id = $1 AND actor_id = $2", [
+      req.params.channelId,
+      req.params.removeActorId,
+    ]);
+    res.json({ ok: true });
+  });
+
+  app.post("/channels/:channelId/invites", async (req, res) => {
+    const actorId = await resolveActor(req);
+    if (!requireActor(actorId, res)) return;
+    if (!(await isChannelOwner(req.params.channelId, actorId))) {
+      return res.status(403).json({ error: "forbidden" });
+    }
+    const token = randomBytes(24).toString("base64url");
+    const tokenHash = createHash("sha256").update(token).digest("hex");
+    const inviteId = `relay:invite:${randomBytes(16).toString("hex")}`;
+    const { max_uses = 1, expires_in_hours } = (req.body as { max_uses?: number; expires_in_hours?: number }) || {};
+    let expires: string | null = null;
+    if (typeof expires_in_hours === "number" && expires_in_hours > 0) {
+      expires = new Date(Date.now() + expires_in_hours * 3600_000).toISOString();
+    }
+    await pool.query(
+      `INSERT INTO channel_invites (invite_id, channel_id, token_hash, created_by_actor_id, max_uses, use_count, expires_at)
+       VALUES ($1,$2,$3,$4,$5,0,$6::timestamptz)`,
+      [inviteId, req.params.channelId, tokenHash, actorId, Math.max(1, max_uses ?? 1), expires],
+    );
+    res.status(201).json({ invite_id: inviteId, token, message: "Send token to the invitee; they POST /channels/.../join on this same origin with X-Demo-Actor set to their user." });
+  });
+
+  app.post("/channels/:channelId/join", async (req, res) => {
+    const actorId = await resolveActor(req);
+    if (!requireActor(actorId, res)) return;
+    const { token } = req.body as { token?: string };
+    if (!token) return res.status(400).json({ error: "token_required" });
+    const tokenHash = createHash("sha256").update(token).digest("hex");
+    const inv = await pool.query(
+      `SELECT invite_id, channel_id, max_uses, use_count, expires_at FROM channel_invites WHERE token_hash = $1 AND channel_id = $2`,
+      [tokenHash, req.params.channelId],
+    );
+    if (!inv.rows[0]) return res.status(400).json({ error: "invalid_token" });
+    const row = inv.rows[0];
+    if (row.expires_at && new Date(String(row.expires_at)) < new Date()) {
+      return res.status(400).json({ error: "invite_expired" });
+    }
+    if (row.use_count >= row.max_uses) return res.status(400).json({ error: "invite_exhausted" });
+    const c = await pool.connect();
+    try {
+      await c.query("BEGIN");
+      await c.query("UPDATE channel_invites SET use_count = use_count + 1 WHERE invite_id = $1", [row.invite_id]);
+      await c.query(
+        `INSERT INTO channel_members (channel_id, actor_id) VALUES ($1, $2) ON CONFLICT (channel_id, actor_id) DO NOTHING`,
+        [req.params.channelId, actorId],
+      );
+      await c.query("COMMIT");
+    } catch (e) {
+      await c.query("ROLLBACK");
+      throw e;
+    } finally {
+      c.release();
+    }
+    res.json({ ok: true, channel_id: req.params.channelId, member_actor_id: actorId });
+  });
+
+  app.get("/channels/:channelId/members", async (req, res) => {
+    const actorId = await resolveActor(req);
+    if (!(await canViewPrivateChannel(req.params.channelId, actorId))) {
+      return res.status(403).json({ error: "forbidden", reason: "not_a_member" });
+    }
+    const ch = await pool.query("SELECT owner_actor_id FROM channels WHERE channel_id = $1", [req.params.channelId]);
+    if (!ch.rows[0]) return res.status(404).json({ error: "not_found" });
+    const ownerId = ch.rows[0].owner_actor_id as string;
+    const ownerR = await pool.query("SELECT actor_id, slug FROM actors WHERE actor_id = $1", [ownerId]);
+    const mem = await pool.query(
+      `SELECT a.actor_id, a.slug FROM channel_members m JOIN actors a ON a.actor_id = m.actor_id
+       WHERE m.channel_id = $1 ORDER BY a.slug`,
+      [req.params.channelId],
+    );
+    res.json({ owner: ownerR.rows[0], members: mem.rows });
+  });
+
+  app.put("/channels/:channelId/e2e-wrapped-key", async (req, res) => {
+    const actorId = await resolveActor(req);
+    if (!requireActor(actorId, res)) return;
+    const m = await pool.query("SELECT 1 FROM channel_members WHERE channel_id = $1 AND actor_id = $2", [
+      req.params.channelId,
+      actorId,
+    ]);
+    if (!m.rows[0]) return res.status(403).json({ error: "forbidden", reason: "not_a_member" });
+    const { wrapped_key_b64 } = req.body as { wrapped_key_b64?: string };
+    if (!wrapped_key_b64) return res.status(400).json({ error: "wrapped_key_b64 required" });
+    const buf = Buffer.from(wrapped_key_b64, "base64");
+    if (buf.length < 16 || buf.length > 4096) return res.status(400).json({ error: "invalid_wrapped_key" });
+    await pool.query(
+      `INSERT INTO channel_e2e_wrapped_keys (channel_id, actor_id, wrapped_key) VALUES ($1, $2, $3)
+       ON CONFLICT (channel_id, actor_id) DO UPDATE SET wrapped_key = EXCLUDED.wrapped_key, updated_at = NOW()`,
+      [req.params.channelId, actorId, buf],
+    );
+    res.json({ ok: true });
+  });
+
+  app.get("/channels/:channelId/e2e-wrapped-key", async (req, res) => {
+    const actorId = await resolveActor(req);
+    if (!requireActor(actorId, res)) return;
+    const m = await pool.query("SELECT 1 FROM channel_members WHERE channel_id = $1 AND actor_id = $2", [
+      req.params.channelId,
+      actorId,
+    ]);
+    if (!m.rows[0]) return res.status(403).json({ error: "forbidden", reason: "not_a_member" });
+    const r = await pool.query("SELECT wrapped_key FROM channel_e2e_wrapped_keys WHERE channel_id = $1 AND actor_id = $2", [
+      req.params.channelId,
+      actorId,
+    ]);
+    if (!r.rows[0]) return res.status(404).json({ error: "not_found" });
+    res.json({ wrapped_key_b64: (r.rows[0].wrapped_key as Buffer).toString("base64") });
   });
 
   app.post("/channels/:channelId/refs", async (req, res) => {
-    const actorId = await resolveDemoActor(req);
+    const actorId = await resolveActor(req);
     if (!requireActor(actorId, res)) return;
+    const chv = await pool.query("SELECT COALESCE(visibility, 'public') AS visibility FROM channels WHERE channel_id = $1", [
+      req.params.channelId,
+    ]);
+    if (!chv.rows[0]) return res.status(404).json({ error: "not_found" });
+    if (chv.rows[0].visibility === "private" && !(await canViewPrivateChannel(req.params.channelId, actorId))) {
+      return res.status(403).json({ error: "forbidden", message: "Private channel: members only." });
+    }
     const { post_object_id, author_actor_id } = req.body as {
       post_object_id?: string;
       author_actor_id?: string;
@@ -615,7 +1004,7 @@ export function createApp(): Express {
   });
 
   app.post("/labels", async (req, res) => {
-    const actorId = await resolveDemoActor(req);
+    const actorId = await resolveActor(req);
     if (!requireActor(actorId, res)) return;
     const { target_object_id, label, channel_id, notes } = req.body as {
       target_object_id?: string;
@@ -654,8 +1043,72 @@ export function createApp(): Express {
     res.json(raw);
   });
 
+  /**
+   * Federation (vertical slice): record interest in a remote actor after allow-listing their origin in `federation_peers`
+   * and resolving the peer via the same `GET /federation/resolve` flow.
+   */
+  app.post("/actors/:actorId/federation/remote-subscribe", async (req, res) => {
+    const actorId = await resolveActor(req);
+    if (!requireActor(actorId, res)) return;
+    if (actorId !== req.params.actorId) return res.status(403).json({ error: "actor_mismatch" });
+    const { origin_url, followee_slug } = req.body as { origin_url?: string; followee_slug?: string };
+    if (!origin_url?.trim() || !followee_slug?.trim()) {
+      return res.status(400).json({ error: "origin_url and followee_slug required" });
+    }
+    const base = origin_url.replace(/\/$/, "");
+    const allowed = await pool.query("SELECT 1 FROM federation_peers WHERE origin_url = $1", [base]);
+    if (allowed.rowCount === 0) {
+      return res.status(403).json({ error: "origin_not_trusted" });
+    }
+    const u = new URL("/actors", `${base}/`);
+    const ac = new AbortController();
+    const t = setTimeout(() => ac.abort(), 8_000);
+    let remote: { actor_id: string; slug: string } | undefined;
+    try {
+      const r = await fetch(u, { signal: ac.signal });
+      if (!r.ok) return res.status(502).json({ error: "remote_fetch_failed", status: r.status });
+      const rows = (await r.json()) as Array<{ actor_id: string; slug: string }>;
+      remote = rows.find((x) => x.slug.toLowerCase() === followee_slug.trim().toLowerCase());
+    } catch (e) {
+      return res.status(502).json({ error: "remote_unreachable", message: (e as Error).message });
+    } finally {
+      clearTimeout(t);
+    }
+    if (!remote) return res.status(404).json({ error: "actor_not_on_origin" });
+    const now = new Date().toISOString();
+    const c = await pool.connect();
+    try {
+      await c.query("BEGIN");
+      const head = await getLogHead(c, actorId);
+      const ev = await appendLog(c, actorId, {
+        actor: actorId,
+        target: remote.actor_id,
+        type: "membership.add",
+        ts: now,
+        prev: head,
+        data: {
+          kind: "federation_remote",
+          origin: base,
+          remote_slug: remote.slug,
+          remote_actor_id: remote.actor_id,
+        },
+      });
+      await c.query("COMMIT");
+      res.json(ev);
+    } catch (e) {
+      await c.query("ROLLBACK");
+      const err = e as { code?: string; head?: string | null };
+      if (err.code === "log_prev_mismatch") {
+        return res.status(409).json({ error: "log_prev_mismatch", head: err.head });
+      }
+      throw e;
+    } finally {
+      c.release();
+    }
+  });
+
   app.post("/trust/attest", async (req, res) => {
-    const actorId = await resolveDemoActor(req);
+    const actorId = await resolveActor(req);
     if (!requireActor(actorId, res)) return;
     const { target_actor_id, level } = req.body as { target_actor_id?: string; level?: string };
     if (!target_actor_id) return res.status(400).json({ error: "target_actor_id required" });

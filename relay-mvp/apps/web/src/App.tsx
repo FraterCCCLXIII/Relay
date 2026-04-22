@@ -8,6 +8,9 @@ import { ChannelPage } from "./pages/ChannelPage.js";
 import { Publisher } from "./pages/Publisher.js";
 import { Diagnostics } from "./pages/Diagnostics.js";
 import { ChannelsList } from "./pages/ChannelsList.js";
+import { RemoteNode } from "./pages/RemoteNode.js";
+import { SignIn } from "./pages/SignIn.js";
+import { Register } from "./pages/Register.js";
 
 const navItem =
   "flex items-center justify-center gap-4 rounded-full px-2 py-2.5 text-xl transition-colors duration-200 md:justify-start md:gap-3 md:px-4 md:py-3 md:text-[20px]";
@@ -67,13 +70,19 @@ function Shell() {
     <div className="min-h-screen w-full text-twx-text dark:text-twx-dark-text">
       <div className="mx-auto flex min-h-screen w-full max-w-7xl">
         <aside className="sticky top-0 hidden h-screen w-[72px] shrink-0 flex-col border-r border-twx-border px-2 py-2 dark:border-twx-dark-border sm:flex md:w-20 lg:w-64 lg:pl-3 lg:pr-2 xl:w-[275px]">
-          <div className="mb-1 flex w-full items-center p-2 md:justify-center lg:justify-start">
+            <div className="mb-1 flex w-full items-center p-2 md:justify-center lg:justify-start">
             <NavLink
               to="/"
               className="flex h-12 w-12 items-center justify-center rounded-full text-2xl font-bold text-twx-blue transition hover:bg-sky-500/10"
               title="Relay"
             >
               R
+            </NavLink>
+            <NavLink
+              to="/sign-in"
+              className="ml-1 hidden text-[12px] font-medium text-twx-muted underline-offset-2 hover:underline dark:text-twx-dark-muted lg:ml-2 lg:inline"
+            >
+              Sign in
             </NavLink>
           </div>
           <nav className="mt-0 flex flex-1 flex-col gap-0.5" aria-label="Primary">
@@ -88,6 +97,12 @@ function Shell() {
             <NavLink to="/channels" className={navClass} title="Channels" end>
               <IconHash />
               <span className="hidden lg:inline">Channels</span>
+            </NavLink>
+            <NavLink to="/remote" className={navClass} title="Remote node" end>
+              <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center text-lg" aria-hidden>
+                ↗
+              </span>
+              <span className="hidden lg:inline">Remote</span>
             </NavLink>
             <NavLink to="/diagnostics" className={navClass} title="System" end>
               <IconCog />
@@ -136,6 +151,9 @@ function Shell() {
                 </NavLink>
                 <NavLink to="/channels" className="shrink-0 rounded-full px-2 py-1 font-medium hover:bg-slate-500/10">
                   #</NavLink>
+                <NavLink to="/remote" className="shrink-0 rounded-full px-2 py-1 font-medium hover:bg-slate-500/10">
+                  ↗
+                </NavLink>
                 <NavLink to="/diagnostics" className="shrink-0 rounded-full px-2 py-1 font-medium hover:bg-slate-500/10">
                   ···
                 </NavLink>
@@ -166,6 +184,9 @@ function Shell() {
               <Route path="/channel/:channelId" element={<ChannelPage />} />
               <Route path="/publisher" element={<Publisher />} />
               <Route path="/diagnostics" element={<Diagnostics />} />
+              <Route path="/remote" element={<RemoteNode />} />
+              <Route path="/sign-in" element={<SignIn />} />
+              <Route path="/register" element={<Register />} />
             </Routes>
           </div>
         </div>

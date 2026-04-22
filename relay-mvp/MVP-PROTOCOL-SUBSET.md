@@ -46,8 +46,13 @@ Schemas used in demos: `post`, `profile`.
 
 ### Channels
 
-- `GET /channels`, `GET /channels/:channelId`
-- `POST /channels/:channelId/refs` adds a **reference** to an existing post (`post_object_id` + resolved author).
+- `GET /channels` — lists **public** channels for everyone; **private** channels only if `X-Demo-Actor` resolves to the **owner** or a **member** on this origin.
+- `GET /channels/:channelId` — **403** for private channels when the actor is not a member (or anonymous).
+- `POST /channels` — create a channel. Body: `{ title, description?, visibility?: "public"|"private", welcome_plaintext? }`. If `welcome_plaintext` is set, it is stored in `channel_secrets` as **AES-256-GCM** ciphertext (server key derived from `RELAY_MVP_CHANNEL_PEPPER` + `channel_id`; **not** end-to-end between clients).
+- `POST /channels/:channelId/members` — **owner** adds a member: `{ member_actor_id }` or `{ member_slug }`.
+- `DELETE /channels/:channelId/members/:actorId` — **owner** removes a member.
+- `POST /channels/:channelId/invites` — **owner** issues `{ token }` (returned once); `POST /…/join` with `{ token }` adds the current demo actor as a member.
+- `POST /channels/:channelId/refs` — **private** channels require the actor to be a member before adding refs.
 - Channel view in the web app merges **refs + labels** to show “removed from this channel.”
 
 ### Snapshots
@@ -73,7 +78,7 @@ Schemas used in demos: `post`, `profile`.
 
 ## Explicit non-goals (out of scope)
 
-- Private messaging, encryption, paid membership, portable membership proofs, P2P sync, ranking/ML, production hardening, OAuth.
+- True **end-to-end** group encryption, paid membership, portable membership proofs to other products, P2P sync, ranking/ML, production hardening, OAuth. (**Note:** the MVP may include **server-side** private channel encryption for small secrets such as a welcome string to exercise **ciphertext in DB** + **membership gating** in tests; see `relay-mvp private-channels` CLI.)
 
 ## Files to read first
 

@@ -1,7 +1,23 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+/**
+ * Resolve `content` from this file, not from `process.cwd()`.
+ * `@relay-mvp/unified` runs Vite with `root` = apps/web but cwd = apps/unified, so relative
+ * `./src/**` was scanning the wrong tree and the JIT build shipped almost no utilities in dev.
+ */
+const content = [
+  path.join(__dirname, "index.html"),
+  path.join(__dirname, "src/**/*.{ts,tsx}"),
+  path.join(__dirname, "../../packages/ui/src/**/*.{ts,tsx}"),
+];
+
 /** @type {import('tailwindcss').Config} */
 export default {
   darkMode: "class",
-  content: ["./index.html", "./src/**/*.{ts,tsx}", "../../packages/ui/src/**/*.{ts,tsx}"],
+  content,
   theme: {
     extend: {
       fontSize: {

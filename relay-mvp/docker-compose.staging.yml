@@ -1,0 +1,44 @@
+# Staging-style stack: Postgres + one container running origin, relay, indexer, and static web.
+# From relay-mvp/: docker compose -f docker-compose.staging.yml up --build
+#
+# Open:
+#   Web:    http://127.0.0.1:4173/
+#   Origin: http://127.0.0.1:3001/health
+#   Relay:  http://127.0.0.1:3002/health
+#   Indexer http://127.0.0.1:3003/health
+#
+# Set RELAY_MVP_STAGING_SEED=0 after first run to keep DB data (seed still TRUNCATEs; use a volume backup for production-like persistence).
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: relay
+      POSTGRES_PASSWORD: relay
+      POSTGRES_DB: relay_mvp
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U relay -d relay_mvp"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+    volumes:
+      - relay_staging_pg:/var/lib/postgresql/data
+
+  stack:
+    build:
+      context: .
+      dockerfile: Dockerfile.staging
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://relay:relay@postgres:5432/relay_mvp
+      RELAY_MVP_STAGING_SEED: ${RELAY_MVP_STAGING_SEED:-1}
+    ports:
+      - "3001:3001"
+      - "3002:3002"
+      - "3003:3003"
+      - "4173:4173"
+
+volumes:
+  relay_staging_pg:

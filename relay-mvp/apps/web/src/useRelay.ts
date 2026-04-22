@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { RelayWsClient } from "@relay-mvp/sdk";
 import type { RelayServerMessage } from "@relay-mvp/protocol";
-import { RELAY_WS } from "./config.js";
+import { ORIGIN_URL, RELAY_WS } from "./config.js";
 
-export function useRelay(actorId: string | null, enabled: boolean) {
+export function useRelay(actorId: string | null, enabled: boolean, opts?: { actorSlug: string | null }) {
   const [connected, setConnected] = useState(false);
   const [lastEvent, setLastEvent] = useState<Extract<RelayServerMessage, { type: "EVENT" }> | null>(null);
   const clientRef = useRef<RelayWsClient | null>(null);
@@ -24,6 +24,8 @@ export function useRelay(actorId: string | null, enabled: boolean) {
       url: RELAY_WS,
       actorId,
       subscriptions: ["global"],
+      originBaseUrl: ORIGIN_URL,
+      actorSlugForRelayAuth: opts?.actorSlug ?? undefined,
       onEvent: (msg) => {
         setLastEvent(msg);
         refreshRef.current();
@@ -33,7 +35,7 @@ export function useRelay(actorId: string | null, enabled: boolean) {
     clientRef.current = c;
     c.connect();
     return () => c.disconnect();
-  }, [actorId, enabled]);
+  }, [actorId, enabled, opts?.actorSlug]);
 
   const disconnectRelay = useCallback(() => {
     clientRef.current?.disconnect();

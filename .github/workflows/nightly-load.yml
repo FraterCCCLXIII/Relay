@@ -1,0 +1,31 @@
+# Scheduled smoke: registry + §19 vector script (no live origin). For k6 against your deployment, run locally:
+#   cd relay-mvp && ORIGIN_URL=https://… k6 run load/k6-smoke.js
+name: Nightly (registry + httpsig)
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: "0 4 * * *"
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "pnpm"
+          cache-dependency-path: relay-mvp/pnpm-lock.yaml
+      - name: Install
+        working-directory: relay-mvp
+        run: pnpm install --frozen-lockfile
+      - name: Registry JSON Schema
+        working-directory: relay-mvp
+        run: pnpm run registry:validate
+      - name: HTTP signature vectors
+        working-directory: relay-mvp
+        run: pnpm run test:httpsig-vectors

@@ -8,14 +8,28 @@
     "dev:relay": "pnpm --filter @relay-mvp/relay dev",
     "dev:indexer": "pnpm --filter @relay-mvp/indexer dev",
     "dev:web": "pnpm --filter @relay-mvp/web dev",
+    "dev:web:peer": "pnpm --filter @relay-mvp/web dev:peer",
     "dev": "concurrently -n origin,relay,indexer,web -c blue,magenta,green,yellow \"pnpm dev:origin\" \"pnpm dev:relay\" \"pnpm dev:indexer\" \"pnpm dev:web\"",
+    "dev:unified": "pnpm --filter @relay-mvp/unified dev",
+    "dev:mini-reader": "pnpm --filter @relay-mvp/mini-reader dev",
+    "dev:full": "node scripts/dev-full.mjs",
+    "compose:staging": "docker compose -f docker-compose.staging.yml up --build",
     "db:migrate": "pnpm --filter @relay-mvp/origin db:migrate",
     "db:seed": "pnpm --filter @relay-mvp/origin db:seed",
     "typecheck": "pnpm -r run typecheck",
+    "test": "node scripts/run-test-suite.mjs",
+    "test:static": "pnpm run typecheck && pnpm run registry:validate && pnpm run test:httpsig-vectors",
     "test:smoke": "pnpm --filter @relay-mvp/cli run build && node packages/cli/dist/index.js test",
-    "test:local": "node scripts/test-local.mjs"
+    "test:two-nodes": "node scripts/two-node-test.mjs",
+    "test:private-channels": "pnpm --filter @relay-mvp/cli run build && node packages/cli/dist/index.js private-channels",
+    "test:local": "node scripts/test-local.mjs",
+    "test:federation-smoke": "node scripts/federation-smoke.mjs",
+    "registry:validate": "node scripts/registry-validate.mjs",
+    "test:httpsig-vectors": "node scripts/httpsig-vectors.mjs",
+    "load:k6": "k6 run --vus 2 --duration 15s load/k6-smoke.js"
   },
   "devDependencies": {
+    "ajv": "8",
     "concurrently": "^9.1.0",
     "typescript": "^5.7.2"
   }

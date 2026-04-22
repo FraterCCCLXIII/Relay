@@ -1,15 +1,19 @@
 import "./db.js";
 
-const RELAY_URL = process.env.RELAY_INTERNAL_URL ?? "http://127.0.0.1:3002";
 const SECRET = process.env.RELAY_INTERNAL_SECRET ?? "relay-dev-secret";
+
+function relayBaseUrl(): string {
+  return process.env.RELAY_INTERNAL_URL ?? "http://127.0.0.1:3002";
+}
 
 export async function publishToRelay(msg: {
   topic: string;
   envelope_kind: "state" | "log" | "label" | "channel_ref";
   payload: unknown;
 }): Promise<void> {
+  const base = relayBaseUrl().replace(/\/$/, "");
   try {
-    const r = await fetch(`${RELAY_URL}/internal/publish`, {
+    const r = await fetch(`${base}/internal/publish`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

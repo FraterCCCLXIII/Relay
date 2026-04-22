@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master, develop]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "pnpm"
+          cache-dependency-path: relay-mvp/pnpm-lock.yaml
+
+      - name: Install
+        working-directory: relay-mvp
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        working-directory: relay-mvp
+        run: pnpm run typecheck
+
+      - name: Registry JSON (Appendix B shapes)
+        working-directory: relay-mvp
+        run: pnpm run registry:validate
+
+      - name: HTTP signature golden vectors
+        working-directory: relay-mvp
+        run: pnpm run test:httpsig-vectors
+
+      - name: Build
+        working-directory: relay-mvp
+        run: pnpm run build

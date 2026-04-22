@@ -60,7 +60,8 @@ export type LogEventType =
   | "reaction.add"
   | "reaction.remove"
   | "channel.accept"
-  | "channel.remove";
+  | "channel.remove"
+  | "membership.add";
 
 export interface LogEventEnvelope {
   kind: "log";
@@ -148,19 +149,26 @@ export type RelayClientMessage =
       type: "HELLO";
       actor_id: string;
       subscriptions: string[];
-      /** MVP: optional demo token instead of auth.sig */
+      /**
+       * HMAC-SHA256 hex from origin `GET /auth/relay-ws` (shared `RELAY_HELLO_SECRET` with relay).
+       * With `hello_bucket` forms the proof used by the relay to bind the connection.
+       */
       demo_token?: string;
+      hello_bucket?: number;
     }
-  | { type: "PING" };
+  | { type: "PING" }
 
 export type RelayServerMessage =
-  | { type: "WELCOME"; session_id: string; server_time: string }
+  | { type: "WELCOME"; session_id: string; server_time: string; relay_protocol?: string }
   | {
       type: "EVENT";
       source: "relay";
       topic: string;
       /** What happened — state update, log append, label, channel ref */
       envelope_kind: "state" | "log" | "label" | "channel_ref";
+      /** Monotonic per server instance for duplicate / ordering checks */
+      event_seq: number;
       payload: unknown;
     }
-  | { type: "PONG" };
+  | { type: "PONG" }
+  | { type: "ERROR"; code: string; message?: string };
