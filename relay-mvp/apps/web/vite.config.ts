@@ -33,6 +33,13 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    /** Bind IPv4 so `http://127.0.0.1:5173` always matches the dev server. */
+    host: "127.0.0.1",
+    /**
+     * If 5173 is in use, fail at startup instead of silently using 5174+ (which breaks
+     * bookmarks to http://127.0.0.1:5173/). Free the port: `lsof -i :5173` then stop that process.
+     */
+    strictPort: true,
     proxy: {
       "/api/origin": {
         target: "http://127.0.0.1:3001",

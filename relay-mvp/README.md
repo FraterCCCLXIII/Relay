@@ -65,6 +65,16 @@ Environment (optional) — `apps/web`:
 
 Relay internal auth (origin → relay): set `RELAY_INTERNAL_SECRET` the same on both origin and relay (default `relay-dev-secret`).
 
+### Troubleshooting: **http://127.0.0.1:5173** will not load
+
+- **Nothing listening:** from `relay-mvp/`, with Postgres migrated + seeded, run **`pnpm dev`**. The UI is Vite; it is bound to **127.0.0.1:5173** (see `apps/web/vite.config.ts`). If the command fails with **port 5173 already in use**, another process (often an old Vite) is holding the port. Free it, then start again:  
+  `lsof -i :5173`  
+  then stop that PID, or:  
+  `kill $(lsof -t -i :5173)`  
+  (only if you intend to stop that process.)
+- **Port already used and Vite used to “hop” to 5174+:** we now set **`strictPort: true`**, so `pnpm dev` will **fail clearly** if 5173 is busy instead of serving on another port with no warning.
+- If you use **`pnpm dev:web` alone**, you still need the **origin** on **3001** (or you will see 502s from the proxy). Prefer **`pnpm dev`** for the full stack.
+
 ### Troubleshooting: `Unexpected token '<'` in the console
 
 The app expected JSON but received HTML (usually Vite’s `index.html`). **Fix:** remove a bad `apps/web/.env` that points `VITE_ORIGIN_URL` at the Vite port (`5173`) or leaves it empty in a way that breaks resolution; restart `pnpm dev`; ensure **origin** is running on **3001**.
