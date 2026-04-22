@@ -13,6 +13,17 @@ This document defines the Relay stack in three layers:
 * **Normative (required for interoperability):** Part I — object schemas, canonicalization, hashing, conflict resolution, auth model, content semantics, and sync rules as stated.
 * **Non-normative (reference only):** Part II and Part III. Implementations **MAY** deviate.
 
+### Deferred to the next specification revision (explicit v1.2 → future)
+
+The following are **out of scope for v1.2** and **scheduled for a future core specification revision** (exact version TBD). This section is the **single checklist** of that intent; the cited sections describe **current** v1.2 behavior only.
+
+| Topic | Target deliverable (next revision) | v1.2 anchor |
+| --- | --- | --- |
+| **Portable membership** | Normative **membership witness** / portable proof that an actor held channel membership at a given time (e.g. Merkle path, signed attestation chain), so verifiers and relays need not trust the origin alone. | **§13.1** |
+| **Global channel identity** | **Canonical channel genesis** bytes and **global** (or cross-origin) **channel identity** / deduplication rules for `channel_id`. | **§4.3**, **§23.2** |
+| **Capability advertisement** | **Origin capability** surface (document or endpoint) **separate from** the actor **identity** document, so **server offers** and **human identity** can version independently. | **§8** (`relay_profiles` note) |
+| **Registry / log `data` coverage** | **Broader normative** interop for **log event `data`** beyond the **Appendix B** MVP five types—i.e. next-revision **core** or **tier-1 registry** rules so additional `type` values are not only companion **`registry/`** drafts. | **§10.2**, **§22.1**, **`registry/`**, **Appendix B** |
+
 ---
 
 ## Part I — Wire Protocol + APIs (normative, v1.2)
@@ -133,7 +144,7 @@ If an implementation cannot represent a value without violating these rules, it 
 #### 4.1.2 JSON strings, Unicode, and escaping (v1.2, normative)
 
 * **Encoding:** the outer document **MUST** be **UTF-8** (as required of JSON in interchange).
-* **Unicode normalization:** for **all string values** that are part of a **signed** or **hashed** object, implementations **SHOULD** apply **[Unicode NFC](https://www.unicode.org/reports/tr15/)** (Canonical Composition) before sign/hash so that **visually** identical user text in different NFD vs NFC no longer **hashes** differently. (Receivers that compare or display the text may still use locale rules; the wire canonical form is NFC when this rule is applied on emit.)
+* **Unicode normalization:** for **all string values** that are part of a **signed** or **hashed** object, implementations **MUST** apply **[Unicode NFC](https://www.unicode.org/reports/tr15/)** (Canonical Composition) **before** computing **digests**, **before** **signing**, and **before** **signature verification** that recomputes canonical signed material, so that **visually** identical user text in different NFD vs NFC **does not** yield different **`object_id`**s or broken cross-implementation verification. (This is **not** optional at the base layer: two compliant implementations **MUST** agree on the bytes hashed.) UI **MAY** still apply locale rules for **display** only; the **wire and crypto** canonical form for those strings is **NFC**.
 * **JSON escaping** (on the wire, after NFC where applied): string contents **MUST** be serialized with **[RFC 8259](https://www.rfc-editor.org/rfc/rfc8259)-compatible** escaping (`\"`, `\\`, `\u` where required) as produced by a conforming JSON generator; the **byte sequence** fed to a digest is the **minimally** escaped UTF-8 JSON for that value **after** the rules above, without optional pretty-printing.
 * If two different NFC strings are **semantically** equal under another Unicode rule (e.g. compatibility), v1.2 does **not** collapse them; **NFC** is the defined canonicalization for protocol strings.
 
@@ -151,7 +162,7 @@ If an implementation cannot represent a value without violating these rules, it 
 
 * `actor_id`: stable actor identifier, `relay:actor:` + **multihash** (see **§4.3**)
 * `object_id`: either logical (e.g. `post:<uuid>`) or content-addressed per §4.2
-* `channel_id`: `relay:channel:` + **multihash** (format under **§4.3**; channel genesis bytes remain extension-defined until a later core revision)
+* `channel_id`: `relay:channel:` + **multihash** (format under **§4.3**; **canonical channel genesis** / **global channel identity** are **deferred** to the **next specification revision**—see **Deferred to the next specification revision** in document status)
 * `label_id`: `relay:label:<hash>`
 * `event_id`: `relay:event:<hash>`
 
@@ -160,7 +171,7 @@ If an implementation cannot represent a value without violating these rules, it 
 A [multihash](https://github.com/multiformats/multihash) value encodes which digest algorithm was used. For interoperability, **independent implementations must agree on the byte string being hashed and on SHA-256** when minting a new `actor_id`.
 
 * **`actor_id` (MUST):** `actor_id` **MUST** be `relay:actor:` + a multihash with **SHA-256** (code `0x12`, 32-byte digest) over the **32-byte raw Ed25519 public key** bytes of the primary active key (the same key material that appears, base64-encoded, in the identity document’s `keys.active` entry; implementations **MUST** decode to raw 32 bytes before hashing). Implementations **MUST NOT** hash alternate encodings (PEM, JWK, base64 string, etc.) for `actor_id` unless a future spec defines a different canonical public-key byte form.
-* **`channel_id` (deferred):** `relay:channel:` + multihash appears throughout this document, but the **input bytes** for channel minting (what gets SHA-256’d) are **not** normatively defined in v1.2. Interoperability is therefore by **opaque** `channel_id` as published by an origin, not by recomputing the ID in every client. There is **no** protocol-level deduplication of “the same” logical channel across **two** origins (see **§23.2**). A future core revision or **extension** should define a single canonical channel-creation payload for new channels.
+* **`channel_id` (deferred):** `relay:channel:` + multihash appears throughout this document, but the **input bytes** for channel minting (what gets SHA-256’d) are **not** normatively defined in v1.2. Interoperability is therefore by **opaque** `channel_id` as published by an origin, not by recomputing the ID in every client. There is **no** protocol-level deduplication of “the same” logical channel across **two** origins (see **§23.2**). **Canonical channel genesis** and **global channel identity** are **deferred to the next specification revision** (see **Deferred to the next specification revision** in document status); until then, an **extension** **MAY** experiment with channel-creation payloads without being core-normative.
 
 ### 5. Conflict resolution (v1.2, normative)
 
@@ -354,6 +365,8 @@ Schema:
 
 * **`relay_profiles`:** an array of **profile identifier** strings the implementation claims (**§2**). It **MUST** be present for **new** v1.2 interop; empty array means “no claim” (not recommended for public services).
 
+**Note (non-normative, forward-looking):** `relay_profiles` lives on the **identity** document, which **mixes** human/actor identity with **server capability** advertisement. That is **convenient** for v1.2 discovery. **Separating capability advertisement from identity** (dedicated **origin capability** document or endpoint) is **deferred to the next specification revision**—see **Deferred to the next specification revision** in document status.
+
 `trust_signals` entries **SHOULD** include an `attestation` (or `attestations`) reference to a **Trust Attestation object** (see §6) when the signal is claimed for interoperability. Legacy inline-only hints (without a resolvable attestation) remain **advisory**.
 
 ### 9. Object classes and storage classes
@@ -411,7 +424,7 @@ For `dual` objects, the **required** interaction between state and log is specif
 
 #### 10.2 The `data` object (v1.2, intentionally incomplete for most types)
 
-The `data` object carries event-type–specific fields. v1.2 **normatively** defines the **envelope** (including `type`, `prev`, signatures) and, where referenced elsewhere, a few **cross-links** (e.g. `state.*` in **§9.1**). For **all but the MVP** set below, a complete `data` schema is **deferred** to **Appendix B** (seed), the extension namespace (**§22**), or a future log-event data registry.
+The `data` object carries event-type–specific fields. v1.2 **normatively** defines the **envelope** (including `type`, `prev`, signatures) and, where referenced elsewhere, a few **cross-links** (e.g. `state.*` in **§9.1**). For **all but the MVP** set below, a complete `data` schema is **deferred** to **Appendix B** (seed), the extension namespace (**§22**), or the companion **`registry/`**. **Broader normative `data` coverage in the core spec** is **deferred to the next specification revision**—see **Deferred to the next specification revision** in document status.
 
 * **MVP / bootstrap (normative in this document):** **Appendix B** is the **instantiated** minimum **`data` JSON** for the event types that almost every first implementation will emit: **`follow.add`**, **`follow.remove`**, **`state.commit`**, **`state.delete`**, **`key.rotate`**. Two implementations that claim **MVP** interop for those `type` values **MUST** use **`data` shapes that are semantically** compatible with **Appendix B** (extra keys in `data` are **allowed**; required keys and types **MUST** match). This removes the “registry exists in theory” bootstrap failure.
 * **All other** `type` values: **deferred**; they **SHOULD** be registered under **§22** and documented before broad interop, with **test vectors** where possible.
@@ -446,6 +459,7 @@ The `data` object carries event-type–specific fields. v1.2 **normatively** def
 
 * **`ts` fields** **MUST** be **RFC 3339 strings** (see **§4.1.1.1**; **not** Unix epoch integers). They are used for **replay** windows (**§19.4**), attestation order (**§6**), and **UX**; they are **not** a guaranteed **global** total order.
 * **Wrong or skewed clocks** on **clients** are partially bounded by **§19.4** (±5 minutes) for **HTTP** requests; for **log** `ts`, a malicious or bad clock can place events in surprising order. **Remedy (optional but useful):** an **origin** or **verifier** **MAY** treat the **append order** of accepted events on the actor’s log as a **monotonic** secondary ordering when `ts` ties or is suspect, as long as that does **not** **silently** drop valid signatures (**§5.3**). Clients **SHOULD** use **`prev` chain** and origin **head** as the source of truth for history, with **`ts`** as a hint.
+* **Recommended ordering strategy (non-authoritative, for implementers):** when presenting or merging a **single** actor log view, **(1)** build the event graph from **`prev`** links and the origin-asserted **head**; **(2)** within one branch, sort by **`prev`** traversal order (append order as returned by the origin is a practical proxy when the API exposes it); **(3)** use **`ts`** only as a **tie-break** or **UX** hint where **`prev`** does not impose an order; **(4)** when **forks** exist, **do not** silently merge—surface branches or follow **§5.3** / client policy. This reduces inconsistent heuristics across clients without pretending **`ts`** is a global total order.
 * **Not required:** a server **MUST NOT** be assumed to NTP-synchronize the world; only **local** policy and **§19.4** skew checks apply to HTTP; log times remain **advisory** for ordering when forks exist.
 
 #### 10.4 Log consensus model (v1.2, normative)
@@ -528,7 +542,8 @@ A state object is origin-authoritative and versioned.
 `policy.posting` may be `open|members|approved`, and membership changes appear as `log` events (e.g. `membership.add` / `membership.remove`). v1.2 does **not** define a **complete cryptographic proof** path from “actor A published post P into channel C at time T” to “A held membership in C at T” in the general federated case.
 
 * **Reality in v1.2:** an **origin** (or a gateway acting on its behalf) is expected to **enforce** channel policy at accept time, using the **replica of the log and state** it trusts. A relay that is not the origin **MUST NOT** be assumed to have performed that proof unless it explicitly implements the same policy engine.
-* **Interoperability gap:** v1.2 **defers** a normative, replayable “membership witness” (e.g. a Merkle path over membership events, or a signed attestation from the channel owner) to a **future** core revision or **extension**. Until then, `members` / `approved` channels **MUST** be understood as **server-enforced** (and auditably logged where the origin is honest), not as a portable proof any independent verifier can recompute from public logs alone without agreed extra data.
+* **Interoperability gap:** **Portable membership** (normative, replayable **membership witness**—e.g. a Merkle path over membership events, or a signed attestation from the channel owner) is **deferred to the next specification revision** (see **Deferred to the next specification revision** in document status); v1.2 does **not** define it. An **extension** **MAY** prototype witness formats without being core-normative. Until a normative witness exists, `members` / `approved` channels **MUST** be understood as **server-enforced** (and auditably logged where the origin is honest), not as a portable proof any independent verifier can recompute from public logs alone without agreed extra data.
+* **Architectural impact (v1.2):** this is the **largest remaining security / portability gap** in the core: **fast relays** and **third-party mirrors** **cannot** independently **cryptographically** verify that a poster was a member at post time; **“members-only”** semantics **reduce to trusting the channel origin** (or an indexer that replicates its policy). That is **honest** for v1.2 but **not** equivalent to globally verifiable access control.
 * **What honest implementations do:** they **MUST** record membership-affecting events on the log; they **SHOULD** reject **locally** posts that fail policy when the implementation has enough state. **Operator transparency (non-behavioral):** deployers **SHOULD** state in their **user-facing or operator** material that cross-origin “member-only” semantics without a shared trusted indexer **amount to trusting the channel’s origin** (this is a **clarity** obligation for honest products, not a testable wire rule).
 
 #### 13.2 Channel authority vs actor post authority (v1.2, normative)
@@ -692,7 +707,19 @@ Response:
 
 * `GET /actors/{actor_id}/state?type=post&after_ts=...&limit=50`
 
-**Snapshot consistency (v1.2, normative):** a response that is labeled or advertised as a **snapshot** (this feed, `GET /actors/{actor_id}/snapshots/latest`, or static **Part II §29** material) **MUST** represent a **self-consistent** view of **all** **included** objects as of a **single** **logical** **commit** **boundary** on the **origin**. A snapshot **MUST** **not** **mix** object **versions** from **different** logical **states**. A snapshot **MAY** be **partial** (not every object in the actor’s history); if **partial**, the response **MUST** include **metadata** indicating **partial** **coverage** (e.g. **`snapshot_id`**, **`as_of_ts`**, **`partial`: true**, or an equivalent documented field) so clients do not mistake the slice for a full dump. A response **MUST** **not** be labeled a **snapshot** if it would **contain** **inconsistent** state (mixed generations) for the objects it returns.
+**Snapshot consistency (v1.2, normative):** a response that is labeled or advertised as a **snapshot** (this feed, `GET /actors/{actor_id}/snapshots/latest`, or static **Part II §29** material) **MUST** represent a **self-consistent** view of **all** **included** objects as of a **single** **logical** **commit** **boundary** on the **origin**. A snapshot **MUST** **not** **mix** object **versions** from **different** logical **states**. A snapshot **MAY** be **partial** (not every object in the actor’s history); if **partial**, the response **MUST** include **metadata** indicating **partial** **coverage** so clients do not mistake the slice for a full dump. A response **MUST** **not** be labeled a **snapshot** if it would **contain** **inconsistent** state (mixed generations) for the objects it returns.
+
+**Canonical snapshot metadata (v1.2):** implementations **SHOULD** expose the equivalent information using **these exact key names** (in the **snapshot** JSON document **alongside** object payloads, or in a **`snapshot_meta`** object at the top level of the response—**MUST** be documented per deployment if nested):
+
+```json
+{
+  "snapshot_id": "<string, origin-defined stable identifier for this snapshot>",
+  "as_of_ts": "<RFC 3339 instant, §4.1.1.1>",
+  "partial": true
+}
+```
+
+For a **full** snapshot, **`partial`** **SHOULD** be **`false`** (or omitted with **`snapshot_id`** + **`as_of_ts`** still present). Additional keys **MAY** be added under **`ext`** / documented extensions. Clients **SHOULD** accept **documented** synonyms only as a **legacy** path; new implementations **SHOULD** emit the canonical keys above to avoid per-server schema forks.
 
 **Clients** **MAY** **assume** that **all** objects **within** a **valid** **snapshot** are **mutually** **consistent** for rendering and sync (**§2.5** baseline includes snapshot fetch for this reason). For **paged** or **incomplete** feeds **without** snapshot metadata, treat as ordinary **query** results, not a normative **snapshot** (**§2** profiles).
 
@@ -761,14 +788,41 @@ Client introduces itself.
   "body": {
     "client": "relay-web/0.1",
     "actor": "relay:actor:abc",
+    "ws_endpoint": "wss://live.example/ws",
     "auth": {
-      "nonce": "server-provided or omitted",
-      "sig": "optional actor signature"
+      "nonce": "server-issued nonce (required when signing)",
+      "ts": "2026-04-21T12:00:00Z",
+      "sig": {
+        "alg": "ed25519",
+        "key_id": "key:active:1",
+        "value": "base64..."
+      }
     },
     "supports": ["state_push", "label_push", "channel_subscriptions"]
   }
 }
 ```
+
+**Unsigned `HELLO`:** `auth` **MAY** be omitted, or **`auth.sig`** omitted, for anonymous subscribe-only sessions as allowed by deployment policy.
+
+#### 18.1.1 HELLO `auth` signature (v1.2, normative)
+
+When **`auth.sig`** is present, the relay **MUST** verify an **Ed25519** signature (**§7.1**) over a **deterministic UTF-8 message** so that **independent implementations** agree on **what** is signed.
+
+* **`auth.nonce`:** **MUST** be present and **non-empty**; **MUST** be the **server-issued** nonce for this connection attempt (or for this `HELLO` exchange if the server documents a challenge round-trip). The relay **MUST** enforce **replay** protection on **`nonce`** per **§18.4.4**.
+* **`auth.ts`:** **MUST** be present; **MUST** be an **RFC 3339** instant (**§4.1.1.1**). The relay **MUST** enforce freshness per **§18.4.4** (align **±5 minutes** with server time unless documented otherwise).
+* **`body.ws_endpoint`:** **MUST** be present when **`auth.sig`** is present; **MUST** be the **exact** WebSocket URL string the client used to open this connection (**scheme**, **host**, **port** if non-default, **path**; no trailing slash added unless actually used). This **binds** the signature to the relay endpoint and reduces cross-endpoint replay of captured `HELLO`s.
+* **`sig`:** **MUST** use the same **`alg` / `key_id` / `value`** shape as envelope signatures (**§7**); **`key_id`** **MUST** resolve to an **active** key on **`body.actor`**’s identity document.
+
+**Signature input (UTF-8 bytes, NFC on each line’s logical content per §4.1.2):** concatenate the following **five** lines, each terminated by a **single** **LF** (`0x0A`), **including** a final LF after the last line:
+
+1. The **literal** domain-separator line: `relay.v1.2.ws_hello_auth`
+2. **`body.actor`** (exact string)
+3. **`auth.nonce`** (exact string)
+4. **`auth.ts`** (exact string)
+5. **`body.ws_endpoint`** (exact string)
+
+The **Ed25519** signature **MUST** be computed over **those UTF-8 bytes** with no BOM. **Verifiers** **MUST** reject **`HELLO`** messages whose **`auth.sig`** does not verify against the message above.
 
 #### 18.2 SUB
 
@@ -832,7 +886,7 @@ Relays **MUST**:
 
 **18.4.2 Session binding**
 
-If **`HELLO`** **authenticates** an **actor** (e.g. `body.actor` with valid **`auth`**, or equivalent **documented** profile):
+If **`HELLO`** **authenticates** an **actor** (e.g. `body.actor` with **`auth.sig`** verifying per **§18.1.1**, or equivalent **documented** profile):
 
 * the **WebSocket** **session** **MUST** be **bound** to that **actor**
 * subsequent **actor-scoped** **operations** (e.g. `PUB` as that actor) **MUST** **match** the **authenticated** **actor**; **mismatch** **MUST** be **rejected**
@@ -1005,6 +1059,8 @@ The **MVP** log-event **`data`** payload shapes for the most common `type` value
 
 **Extension registry (companion, v1.2):** This repository’s **`registry/`** directory is the **MVP** **public** **registry** for log-event `data` definitions and (optionally) **`relay.ext.*`** object extensions. Each entry is one **JSON** (or **Markdown**) file; see **`registry/README.md`**, **`registry/CONTRIBUTING.md`**, and the **seed** entries (e.g. `trust.attest`, `membership.add`, `state.revoke`) there. The registry **supplements** this spec; it does **not** **override** **Appendix B** for the five **MVP** **normative** `type` + `data` rows.
 
+**Broader registry coverage**—making **additional** log-event **`data`** types **first-class normative interop** in the **core** spec (beyond **Appendix B** and companion **`registry/`** drafts)—is **deferred to the next specification revision**; see **Deferred to the next specification revision** in document status.
+
 #### 22.2 Extension object requirements
 
 Each published extension (when used in `ext` / `ext_payload`) **MUST** define, in human-readable specification form:
@@ -1071,7 +1127,7 @@ The same **ignore-unknown** and **round-trip** discipline applies to **top-level
 * **Malicious** or non-conforming **clients** may retain, forward, or mis-display data; the protocol can only make honest behavior unambiguous
 * **Dominant indexers** can skew discovery; clients **SHOULD** diversify sources
 * **Trust signals** can still social-centralize if users converge on a few issuers; this spec only requires verifiable attestation, not a fixed hierarchy
-* **`channel_id` is not globally unique in v1.2 (known gap, MVP-acceptable):** because **channel minting bytes** are **deferred** (**§4.3**), two different origins can assign **different** `channel_id` values to the **same** logical “channel” in the human sense, and the protocol has **no** built-in way to **detect** or **merge** them. Interop assumes an **opaque** id **published by the origin** you are talking to, not a recomputed **global** id. A future spec or **extension** may define canonical **channel genesis**; until then, treat duplicate logical channels as a **worse UX / discovery** problem, not a signature failure.
+* **`channel_id` is not globally unique in v1.2 (known gap, MVP-acceptable):** because **canonical channel genesis** / **global channel identity** are **deferred to the next specification revision** (**§4.3**, **Deferred to the next specification revision** in document status), two different origins can assign **different** `channel_id` values to the **same** logical “channel” in the human sense, and the protocol has **no** built-in way to **detect** or **merge** them. Interop assumes an **opaque** id **published by the origin** you are talking to, not a recomputed **global** id. An **extension** **MAY** define experimental genesis rules; **core** normative global identity waits for the next revision. Until then, duplicate logical channels are a **product-level tradeoff**, not merely a footnote: **discovery fragments** across origins, users **cannot** rely on a single global channel key, and **aliases** (**§13.3**) plus **indexers** become **load-bearing** for “same channel everywhere” UX. None of that is a **signature** failure—but it **is** a **real interoperability and UX cost** honest clients should plan for.
 
 ---
 
@@ -1248,7 +1304,7 @@ To reduce polling cost:
 
 * generate actor state snapshots every N writes or T minutes
 * include object IDs, versions, updated timestamps, and hashes
-* **Consistency (align Part I, §17.6, normative):** a **published** **snapshot** (file or `GET /actors/{actor_id}/snapshots/latest`) **MUST** be **self-consistent** for **all** **included** objects as of a **single** **logical** **commit** **boundary** on the origin. **MUST** **not** **mix** **versions** from **different** **generations** of the same object. A snapshot **MAY** be **partial**; if so, **metadata** (e.g. `partial`, `as_of_ts`, `snapshot_id`) **MUST** make **partial** **coverage** **clear**. **MUST** **not** label a response a **snapshot** if it is **inconsistent**. See **Part I §17.6** for feed pagination vs snapshot labeling.
+* **Consistency (align Part I, §17.6, normative):** a **published** **snapshot** (file or `GET /actors/{actor_id}/snapshots/latest`) **MUST** be **self-consistent** for **all** **included** objects as of a **single** **logical** **commit** **boundary** on the origin. **MUST** **not** **mix** **versions** from **different** **generations** of the same object. A snapshot **MAY** be **partial**; if so, **metadata** **MUST** make **partial** **coverage** **clear**. Implementations **SHOULD** use the **canonical** **`snapshot_id` / `as_of_ts` / `partial`** shape from **Part I §17.6**. **MUST** **not** label a response a **snapshot** if it is **inconsistent**. See **Part I §17.6** for feed pagination vs snapshot labeling.
 * It remains **valid** to serve **non-snapshot** **incomplete** lists (cursors, limits) as ordinary query results, not as a normative **snapshot** unless documented as such.
 
 Endpoint:
@@ -1613,6 +1669,7 @@ Relay v1.2 is a **hybrid protocol stack**; Part I (wire protocol) is the interop
 * **Static feed hosting** provides durability and cheap mirroring
 * **Optional P2P** provides resilience, not the primary UX path
 * **Clients** own **keys** and **local** policy, including attestation and extension handling
+* **Deferred** work (**portable membership**, **global channel identity**, **capability split from identity**, **broader normative registry coverage**) is **listed once** under **Deferred to the next specification revision** in the document status section
 
 The architecture is intended to be implementable, resistant to **silent** data loss in logs, and **explicit** about who is authoritative, what is conflicted, and what security properties are **not** guaranteed.
 
@@ -1630,7 +1687,7 @@ This appendix **instantiates** the minimum **`data`** object for the five event 
 | `state.delete` | `{ "object_id": "<string>", "version": <integer> }` | `version` is the version after tombstone/delete per **§16.2**. |
 | `key.rotate` | `{ "new_key_id": "<string>" }` with optional `"previous_key_id": "<string>"` | **Keys** are identity key ids (e.g. `key:active:2`). **§10.2.1:** `target` **MAY** be omitted; if present, **SHOULD** = `actor` (the account whose **identity** is updated). **Invalidation:** after the origin applies the new identity, the **replaced** active key (identified by `previous_key_id` when present) **MUST NOT** be accepted for **new** HTTP or object signatures; the updated **`keys.active`** in the identity document is authoritative together with this event. For extra audit, implementations **MAY** add e.g. `"superseded_by_event": "relay:event:…"` in `data` (extension) but it is **not** required in the seed. |
 
-**Not in this seed:** e.g. `trust.attest`, `membership.add`, `state.revoke`—define `data` in a **registry** file (**`registry/`** in the Relay spec repository) or a later spec revision before claiming interop for those types. See **§22.1**.
+**Not in this seed:** e.g. `trust.attest`, `membership.add`, `state.revoke`—define `data` in a **registry** file (**`registry/`** in the Relay spec repository) or a later spec revision before claiming interop for those types. See **§22.1**. **Broader normative registry coverage** (next-revision **core** interop for many event types) is **deferred**; see **Deferred to the next specification revision** in document status.
 
 ---
 
@@ -1648,7 +1705,7 @@ This appendix **instantiates** the minimum **`data`** object for the five event 
 | C1 | Use canonical JSON for hashing and signing of protocol objects. | §4, intro |
 | C1a | **Numbers:** **§4.1.1** — no `e`/`E` exponents; JSON `number` only for **integers**; fractions/precision in **strings** or fixed-scale integers per schema. | §4.1.1 |
 | C1a1 | **Instants / timestamps:** `ts`, `created_at`, `*\_at` / `*\_ts` fields **MUST** be **RFC 3339 strings**; **not** Unix epoch **numbers**. | §4.1.1.1, §10.3 |
-| C1b | **Strings in signed/hashed objects:** UTF-8; **SHOULD** NFC; RFC 8259-consistent minimal escaping. | §4.1.2 |
+| C1b | **Strings in signed/hashed objects:** UTF-8; **MUST** NFC before digest/sign/verify; RFC 8259-consistent minimal escaping. | §4.1.2 |
 | C1c | **Signature algorithms (core interop):** `ed25519` **MUST**; other algorithms only via **extension** + no silent `alg` substitution. | §7.1 |
 | C2 | Use **SHA-256** for all base-protocol **content-addressed** `relay:obj:…` identifiers; **clients** must implement and accept **SHA-256** for that purpose. | §4.2 |
 | C3 | Derive new **`actor_id`** as `relay:actor:` + SHA-256 **multihash** over **32-byte raw Ed25519** public key (decoded from the identity `keys.active` style material); do **not** hash PEM/JWK/wrapper encodings. | §4.3 |
@@ -1668,11 +1725,13 @@ This appendix **instantiates** the minimum **`data`** object for the five event 
 | C11b | **MVP** log `data` for `follow.add|follow.remove|state.commit|state.delete|key.rotate` **MUST** match **Appendix B** (allow extra keys). | Appendix B, §10.2 |
 | C11c | **`target` on log events:** `follow.*` **MUST** populate `target` with followee `actor_id`; `key.rotate` **`target`** optional, see **§10.2.1**; old key invalidation per **§10.2.1** / identity. | §10.2.1, Appendix B |
 | C11d | **Snapshots (Part I):** **MUST** be **self-consistent** at a **single** **logical** **commit** **boundary**; **MUST** **not** **mix** **generations**; if **partial**, **MUST** declare **metadata**; **MUST** **not** use the **snapshot** label for **inconsistent** responses. Non-snapshot **paged** feeds: **§17.6**. *See **A.3** for Part II echo.* | §17.6 |
+| C11e | **Snapshot metadata:** if **partial** (or full) snapshot metadata is emitted, **SHOULD** use **`snapshot_id`**, **`as_of_ts`**, **`partial`** per **§17.6** canonical shape. | §17.6 |
 | C12 | **Channel membership** limits are **not** a portable **crypto proof** in v1.2; do **not** assume relays enforced membership; record membership on log; see **§13.1** (operator **SHOULD** in third bullet, **A.2**). | §13.1 |
 | C12a | Channels **MUST NOT** mutate author post state in place; use **labels** / **refs** / **log** per **§13.2**; **equivalence** / **alias** objects **MUST** follow **§13.3** if used. | §13.2, §13.3 |
 | C13 | **RFC 9421** for authenticated origin HTTP in v1.2 interop; **server** validates digest and binds key to `actor` identity. | §19 |
 | C13a | **§19.4** replay: **±5 min** skew; require **created/expires** or **nonce** uniqueness per actor+window; reject **expired** / reused nonce. | §19.4 |
 | C13b | **WebSocket:** verify **PUB** **signatures**; **session** **binding**; **no** **unsigned** **mutations**; **replay** and **auth** per **§18.4** when a Fast Relay is offered. | §18, §18.4 |
+| C13c | **HELLO `auth.sig` (when present):** **MUST** verify **Ed25519** over **`relay.v1.2.ws_hello_auth` + LF + `actor` + LF + `nonce` + LF + `ts` + LF + `ws_endpoint` + LF** (UTF-8, **§18.1.1**); **`nonce`**, **`ts`**, **`ws_endpoint`** **MUST** be present as required there. | §18.1.1 |
 | C14 | **Ephemeral** / expiry client **MUST**s and **MUST NOT**s (render, delete claims, copy warning). | §20.3–20.4 |
 | C15 | Return structured errors; support **`conflict_detected`** where version conflicts are surfaced. | §21 |
 | C16 | Extensions: optional vs **ext_required** (**§22.5**); **§22.4** ignore-unknown for optional; **§22.6** relay policy JSON. | §22.4–§22.6 |
