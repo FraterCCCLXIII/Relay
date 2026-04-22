@@ -1,0 +1,49 @@
+{
+  "registry_entry_version": 1,
+  "document_version": "1.0.0-draft",
+  "kind": "log_event_data",
+  "log_event_type": "membership.add",
+  "title": "Log event `data` for `type`: membership.add",
+  "summary": "Declares that an actor was added to a channel (or similar membership scope). v1.2 core does not require a portable crypto proof; origin enforcement is the practical baseline (spec §13.1).",
+  "applies": {
+    "log_event": {
+      "type": "membership.add"
+    }
+  },
+  "data_schema": {
+    "type": "object",
+    "required": ["channel_id", "member_actor"],
+    "properties": {
+      "channel_id": {
+        "type": "string",
+        "description": "Channel id `relay:channel:...` as known to the origin."
+      },
+      "member_actor": {
+        "type": "string",
+        "description": "Actor id `relay:actor:...` added to the channel."
+      },
+      "role": {
+        "type": "string",
+        "description": "Optional role token (e.g. member, moderator) — string enum to be profiled; unknown values are opaque."
+      }
+    },
+    "additionalProperties": true
+  },
+  "target_rules": {
+    "description": "`target` MAY be `channel_id` for routing; if present, it SHOULD be consistent with `data.channel_id`.",
+    "normative_in_core": false
+  },
+  "validation_rules": [
+    "`channel_id` and `member_actor` MUST be non-empty strings in the `relay:channel:…` and `relay:actor:…` id formats the deployment uses.",
+    "Origin enforces that the event `actor` is allowed to add members per channel policy (out of band to the registry file).",
+    "Same membership represented twice: origin policy (reject duplicate, idempotency key, or supersede) — not fixed by the registry v1."
+  ],
+  "compatibility": {
+    "forward": "Optional keys: ignore safely for v1 readers.",
+    "backward": "Removing `channel_id` or `member_actor` is a breaking change (new file `v2`).",
+    "version_bump": "Adding new **required** keys requires `v2` or a new `type` (avoid silent split-brain names)."
+  },
+  "spec_references": {
+    "Relay-Stack-Spec-v1-2": ["§10.2", "§10.2.1", "§13.1", "Appendix B (not in seed)"]
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "registry_entry_version": 1,
+  "document_version": "1.0.0-draft",
+  "kind": "log_event_data",
+  "log_event_type": "trust.attest",
+  "title": "Log event `data` for `type`: trust.attest",
+  "summary": "Records publication or update of a trust attestation (see spec §6). Verifiers use the attestation object id and `trust.revoke` for lifecycle.",
+  "applies": {
+    "log_event": {
+      "type": "trust.attest"
+    }
+  },
+  "data_schema": {
+    "type": "object",
+    "required": ["attestation_id"],
+    "properties": {
+      "attestation_id": {
+        "type": "string",
+        "description": "The `id` of the Trust Attestation object (e.g. `relay:attestation:...`) this event attests to."
+      }
+    },
+    "additionalProperties": true
+  },
+  "target_rules": {
+    "description": "`target` on the log event SHOULD reference the same attestation or the subject of the attestation, per implementation profile. If the spec is silent, `target` MAY be the `attestation_id` for deduplication. Registry consumers SHOULD document chosen binding.",
+    "normative_in_core": false
+  },
+  "validation_rules": [
+    "`attestation_id` MUST be a non-empty string in the deployment's attestation id format.",
+    "Origin SHOULD reject the append if the object at `attestation_id` is not a valid signed Trust Attestation object verifiable at insert time (§6).",
+    "`data` values MUST be canonical per §4 when hashed or signed with the log envelope."
+  ],
+  "compatibility": {
+    "forward": "Add optional keys in `data`: readers MUST ignore unknown keys for the same `registry` file `document_version` family unless `ext_required` on a wrapper object says otherwise (core §22.4 / §22.5).",
+    "backward": "If `attestation_id` is missing, event is **invalid** for v1.0+ interop for this type.",
+    "version_bump": "Breaking changes to required keys or types require a new file version (e.g. `v2`)."
+  },
+  "spec_references": {
+    "Relay-Stack-Spec-v1-2": ["§6", "§7", "§10.2", "Appendix B (not in seed)"]
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "registry_entry_version": 1,
+  "document_version": "1.0.0-draft",
+  "kind": "log_event_data",
+  "log_event_type": "state.revoke",
+  "title": "Log event `data` for `type`: state.revoke",
+  "summary": "Auditable marker that revocable or grant-backed state was cryptographically or policy revoked (e.g. key grant, revocable post). Pairs with content_class revocable and dual objects (§9.1, §20).",
+  "applies": {
+    "log_event": {
+      "type": "state.revoke"
+    }
+  },
+  "data_schema": {
+    "type": "object",
+    "required": ["object_id", "version"],
+    "properties": {
+      "object_id": {
+        "type": "string",
+        "description": "State object id (e.g. `post:…`) whose material is revoked for rendering."
+      },
+      "version": {
+        "type": "integer",
+        "description": "Monotonic state version at which revoke is applied (per §4.1.1 integer rules in serialized form)."
+      },
+      "revoke_scope": {
+        "type": "string",
+        "description": "Optional: e.g. key_grant|object|manifest — extensible; unknown values are opaque to generic clients."
+      }
+    },
+    "additionalProperties": true
+  },
+  "target_rules": {
+    "description": "`target` MAY duplicate `object_id` for indexers; if both exist they MUST be consistent for v1 interop of this file.",
+    "normative_in_core": false
+  },
+  "validation_rules": [
+    "`version` MUST be a JSON integer in canonical form (§4.1.1).",
+    "Origin MUST ensure revoke ordering vs state; clients MUST follow §5 on conflict with head.",
+    "For `dual` objects, state storage and this log event together define audit trail (§9.1)."
+  ],
+  "compatibility": {
+    "forward": "Optional `revoke_scope` and other optional keys: ignore if unknown; MUST NOT treat as full semantic revoke without local policy.",
+    "backward": "Dropping `object_id` or `version` is invalid for v1.",
+    "version_bump": "New required fields → new registry file version."
+  },
+  "spec_references": {
+    "Relay-Stack-Spec-v1-2": ["§9.1", "§20", "§10.2", "Appendix B (not in seed)"]
+  }
+}

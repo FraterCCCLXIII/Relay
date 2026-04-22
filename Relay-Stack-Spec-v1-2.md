@@ -82,20 +82,7 @@ An implementation with **`relay.profile.full` MUST** support **all** of **`relay
 
 #### 2.5 Interoperability baseline (practical)
 
-Two independent implementations can claim **practical** Relay v1.2 interoperability with each other **only if** both support **at least** the **minimal** **interoperability** **set** (same as **`relay.profile.minimal`**, **§2.2**), namely **all** of:
-
-* **Canonical** JSON (Relay rules, **§4**)
-* **SHA-256** content hashing (**§4.2**)
-* **Ed25519** signatures (**§7.1**)
-* **Identity** document resolution (**§8**)
-* **State** publish and fetch APIs (**§16**, **§17.5**)
-* **Log** append and fetch APIs (**§16**, **§17**)
-* **MVP** log event **`type`** values and **`data`** / **`target` rules** (**Appendix B**, **§10.2**): **`follow.add`**, **`follow.remove`**, **`state.commit`**, **`state.delete`**, **`key.rotate`**
-* **RFC 9421** HTTP message signatures (**§19**)
-* **Conflict** detection and resolution (**§5**)
-* **Snapshot** fetch and **§17.6** rules (**Part II §29**)
-
-Profile strings **MUST** be declared in **`relay_profiles`** for discoverability.
+Two independent implementations can claim **practical** Relay v1.2 interoperability with each other **if and only if** both **declare** and **implement** **`relay.profile.minimal`**; the full requirement set is **§2.2** (single source of truth—do not duplicate that list here). Profile strings **MUST** be declared in **`relay_profiles`** on the identity document (**§8**) for discoverability.
 
 ### 3. Transport model
 
@@ -573,6 +560,10 @@ Channels **MAY** declare **equivalence** relationships with other channels. Equi
 }
 ```
 
+**Issuance and authority (v1.2, normative):** The **`sig`** **MUST** **verify** under **`issuer`’s** key (**§7**). The **core** spec does **not** **require** that **`issuer`** be the **`owner`** of **`source_channel`**, **`target_channel`**, or **both**; **any** **actor** **may** **publish** a **signed** **alias** on **paths** their **software** and **peers** **accept**. **Equivalents** from an **`issuer`** that **does** **not** **control** (as **`owner`**, or a **documented** **delegate** on the **channel** object) **either** **referenced** **channel** are **self-asserted** and **MUST** **not** be **treated** as **authoritative** for **merging** **state** or **rebinding** **authority** without **local** **policy** or **out-of-band** **trust** in **`issuer`**. **Origins** **MAY** **refuse** to **index**, **replicate**, or **prioritize** **alias** objects that **do** **not** satisfy **operator**-defined **issuer** **rules** (e.g. require **`issuer`** to **control** at least one **side** of the **relation**).
+
+**Client weighting (v1.2, non-normative; strongly recommended):** **Clients** **SHOULD** **weight** **equivalence** **claims** by **whether** **`issuer`** **controls** **one** or **both** of the **referenced** **channels** (e.g. **matches** **`owner`** on **channel** **state** the **client** **trusts**), to **mitigate** **equivalence** **spam**; **unrelated-issuer** **links** **SHOULD** **not** receive the **same** **default** **prominence** in **UI** or **merge** **suggestions** as **owner-** or **delegate-** **issued** **links** **unless** a **trusted** **attestation** or **policy** **says** **otherwise** (see **§6**).
+
 **Semantics of `relation`:**
 
 * **`same_as`:** the two channels represent the **same** conceptual **space** (from the issuer’s claim).
@@ -1011,6 +1002,8 @@ Core extension identifiers use the **namespace**:
 * `relay.ext.<name>.v<version>`
 
 The **MVP** log-event **`data`** payload shapes for the most common `type` values are **normative in Appendix B** of this document. **Other** `type` values use **deferred** `data` schemas and **SHOULD** be named and versioned the same way (or in a companion “log event data” spec) so that `trust.attest`, `membership.add`, etc. are not **silently** incompatible—see **§10.2**.
+
+**Extension registry (companion, v1.2):** This repository’s **`registry/`** directory is the **MVP** **public** **registry** for log-event `data` definitions and (optionally) **`relay.ext.*`** object extensions. Each entry is one **JSON** (or **Markdown**) file; see **`registry/README.md`**, **`registry/CONTRIBUTING.md`**, and the **seed** entries (e.g. `trust.attest`, `membership.add`, `state.revoke`) there. The registry **supplements** this spec; it does **not** **override** **Appendix B** for the five **MVP** **normative** `type` + `data` rows.
 
 #### 22.2 Extension object requirements
 
@@ -1614,6 +1607,7 @@ For a realistic first build, implement in this order:
 Relay v1.2 is a **hybrid protocol stack**; Part I (wire protocol) is the interoperability core, and Parts II–III are implementation guidance.
 
 * **Conformance** **profiles** and **`relay_profiles`** on **identity** make partial implementations and **interoperability** **claims** explicit (**§2**)
+* **The `registry/` directory** in this repository holds **draft** **log-event `data`** (and future **`relay.ext.*`**) **entries** for **types** beyond **Appendix B**, so “register before interop” is **actionable** (**§22.1**)
 * **HTTP** provides authoritative fetch and publication (v1.2 standardizes on **HTTP Message Signatures** for interop; see **§19**)
 * **WebSocket relays** provide fast fan-out and replay windows (**§18.4** for security on `PUB` / sessions)
 * **Static feed hosting** provides durability and cheap mirroring
@@ -1636,7 +1630,7 @@ This appendix **instantiates** the minimum **`data`** object for the five event 
 | `state.delete` | `{ "object_id": "<string>", "version": <integer> }` | `version` is the version after tombstone/delete per **§16.2**. |
 | `key.rotate` | `{ "new_key_id": "<string>" }` with optional `"previous_key_id": "<string>"` | **Keys** are identity key ids (e.g. `key:active:2`). **§10.2.1:** `target` **MAY** be omitted; if present, **SHOULD** = `actor` (the account whose **identity** is updated). **Invalidation:** after the origin applies the new identity, the **replaced** active key (identified by `previous_key_id` when present) **MUST NOT** be accepted for **new** HTTP or object signatures; the updated **`keys.active`** in the identity document is authoritative together with this event. For extra audit, implementations **MAY** add e.g. `"superseded_by_event": "relay:event:…"` in `data` (extension) but it is **not** required in the seed. |
 
-**Not in this seed:** e.g. `trust.attest`, `membership.add`, `state.revoke`—define `data` in a **registered** profile or a later spec revision before claiming interop for those types.
+**Not in this seed:** e.g. `trust.attest`, `membership.add`, `state.revoke`—define `data` in a **registry** file (**`registry/`** in the Relay spec repository) or a later spec revision before claiming interop for those types. See **§22.1**.
 
 ---
 
