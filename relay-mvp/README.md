@@ -100,7 +100,13 @@ This:
 4. Starts **origin** (`:3001`) and **indexer** (`:3003`) from `apps/*/dist` (use **`TEST_LOCAL_VERBOSE=1`** to show server output instead of a quiet pipe)
 5. Runs the **CLI** smoke test against that stack, then **stops** the two node processes (Docker is left running)
 
-`DATABASE_URL` defaults to the same DSN as in **Quick start**; override if needed. **Ports 3001 and 3003 must be free** before `test:local` runs.
+`DATABASE_URL` defaults to the same DSN as in **Quick start**; override if needed. The script also loads **`relay-mvp/.env`** when present (so it matches `pnpm dev`).
+
+**Ports 3001 and 3003 must be free** before `test:local` runs (it starts its own origin + indexer). If you already have **`pnpm dev`** running, use only build + CLI against the live stack:
+
+```bash
+RELAY_MVP_TEST_REUSE=1 pnpm test:local
+```
 
 ## Documentation
 

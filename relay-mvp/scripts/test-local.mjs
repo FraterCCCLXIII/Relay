@@ -7,8 +7,13 @@
  * 4) origin + indexer in background (from built dist)
  * 5) relay-mvp CLI smoke (origin + optional indexer)
  * 6) SIGTERM origin/indexer, exit with CLI code
+ *
+ * If origin/indexer are already running (e.g. `pnpm dev`), use:
+ *   RELAY_MVP_TEST_REUSE=1 pnpm test:local
+ * to only run `build` + CLI smoke (no Docker, DB, or new processes).
  */
 import { spawn, execSync, spawnSync } from "node:child_process";
+import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import process from "node:process";
@@ -16,6 +21,27 @@ import process from "node:process";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
 const defaultDb = "postgres://relay:relay@localhost:5432/relay_mvp";
+
+/** Load `relay-mvp/.env` so `DATABASE_URL` matches `pnpm dev` (does not override real env). */
+function loadLocalDotenv() {
+  const p = path.join(root, ".env");
+  if (!existsSync(p)) return;
+  const text = readFileSync(p, "utf8");
+  for (const line of text.split("\n")) {
+    const t = line.trim();
+    if (!t || t.startsWith("#")) continue;
+    const eq = t.indexOf("=");
+    if (eq < 1) continue;
+    const k = t.slice(0, eq).trim();
+    let v = t.slice(eq + 1).trim();
+    if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+      v = v.slice(1, -1);
+    }
+    if (k && process.env[k] === undefined) process.env[k] = v;
+  }
+}
+
+loadLocalDotenv();
 
 const env = {
   ...process.env,
@@ -146,6 +172,19 @@ async function assertApiPortsFree() {
   }
 }
 
+async function runCliSmoke() {
+  console.log("\n→ @relay-mvp/cli smoke test\n");
+  const cli = path.join(root, "packages", "cli", "dist", "index.js");
+  return await new Promise((resolve) => {
+    const t = spawn(
+      process.execPath,
+      [cli, "test", "--indexer", indexerUrl, "--origin", originUrl],
+      { stdio: "inherit", env: { ...env }, cwd: root },
+    );
+    t.on("close", (c) => resolve(c ?? 1));
+  });
+}
+
 async function waitForHealth(url, { timeoutMs = 90_000, label } = {}) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -165,6 +204,16 @@ async function waitForHealth(url, { timeoutMs = 90_000, label } = {}) {
 
 async function main() {
   process.chdir(root);
+
+  if (process.env.RELAY_MVP_TEST_REUSE === "1") {
+    console.log(
+      "→ RELAY_MVP_TEST_REUSE=1: build + CLI only (expects healthy origin :3001 and indexer :3003)\n",
+    );
+    pnpmRun("build");
+    const code = await runCliSmoke();
+    process.exit(code === 0 ? 0 : code);
+  }
+
   const skipDocker = process.env.SKIP_DOCKER === "1";
 
   console.log("→ pnpm run build (monorepo)\n");
@@ -203,16 +252,7 @@ async function main() {
   await waitForHealth(`${originUrl}/health`, { label: "origin" });
   await waitForHealth(`${indexerUrl}/health`, { label: "indexer" });
 
-  console.log("\n→ @relay-mvp/cli smoke test\n");
-  const cli = path.join(root, "packages", "cli", "dist", "index.js");
-  const code = await new Promise((resolve) => {
-    const t = spawn(
-      process.execPath,
-      [cli, "test", "--indexer", indexerUrl, "--origin", originUrl],
-      { stdio: "inherit", env: { ...env }, cwd: root },
-    );
-    t.on("close", (c) => resolve(c ?? 1));
-  });
+  const code = await runCliSmoke();
 
   cleanup();
   await sleep(200);
