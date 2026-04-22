@@ -178,6 +178,19 @@ importers:
         specifier: ^6.0.6
         version: 6.4.2(@types/node@22.19.17)(jiti@1.21.7)(tsx@4.21.0)
 
+  packages/cli:
+    dependencies:
+      '@relay-mvp/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.2
+        version: 22.19.17
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
   packages/protocol:
     dependencies:
       '@noble/ed25519':

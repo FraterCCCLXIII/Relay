@@ -1,0 +1,21 @@
+{
+  "name": "@relay-mvp/cli",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "CLI smoke tests for the Relay MVP origin (and optional indexer)",
+  "bin": {
+    "relay-mvp": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test:smoke": "node dist/index.js test"
+  },
+  "dependencies": {
+    "@relay-mvp/sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  }
+}

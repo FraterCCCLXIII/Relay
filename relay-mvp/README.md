@@ -74,6 +74,34 @@ The app expected JSON but received HTML (usually Vite’s `index.html`). **Fix:*
 - **502** with JSON `proxy_upstream_unreachable`: nothing is listening on **3001**. Run **`pnpm dev`** (all services) or **`pnpm dev:origin`** with a valid **`DATABASE_URL`**, then refresh the web app.
 - **500** with JSON `internal_error`: the origin is up but threw (often **Postgres**). Run **`pnpm db:migrate`** (and **`pnpm db:seed`** if the DB is empty). Check the origin terminal for the stack trace.
 
+## CLI — smoke tests
+
+With **origin** (and **Postgres** + migrate + seed) already running, from `relay-mvp/`:
+
+```bash
+pnpm test:smoke
+```
+
+This builds `packages/cli` and runs `relay-mvp` against **`http://127.0.0.1:3001`** (override with `RELAY_MVP_ORIGIN` or `--origin <url>`). Optional: `--indexer http://127.0.0.1:3003` or `RELAY_MVP_INDEXER` to check indexer endpoints. `RELAY_MVP_WRITER` / `RELAY_MVP_READER` (or `--writer` / `--reader`) default to **alice** / **bob** to match the seed.
+
+### Full local run (build + DB + API servers + smoke)
+
+From `relay-mvp/`, in one go:
+
+```bash
+pnpm test:local
+```
+
+This:
+
+1. Runs **`pnpm run build`**
+2. Starts **`docker compose up -d`** for Postgres (skip with **`SKIP_DOCKER=1`** if the DB is already up)
+3. Retries **`pnpm db:migrate`** until the DB is reachable, then **`pnpm db:seed`**
+4. Starts **origin** (`:3001`) and **indexer** (`:3003`) from `apps/*/dist` (use **`TEST_LOCAL_VERBOSE=1`** to show server output instead of a quiet pipe)
+5. Runs the **CLI** smoke test against that stack, then **stops** the two node processes (Docker is left running)
+
+`DATABASE_URL` defaults to the same DSN as in **Quick start**; override if needed. **Ports 3001 and 3003 must be free** before `test:local` runs.
+
 ## Documentation
 
 - **`MVP-PROTOCOL-SUBSET.md`** — exactly what was implemented vs stubbed.
