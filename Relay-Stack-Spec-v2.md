@@ -1,33 +1,75 @@
-Migration Path (if coming from v1.4)
-log events become Event primitives
 
-state objects become State primitives
 
-channel objects become State objects of type channel.config
+# Relay 2.0 stack specification (v1.4-1 / v1.5 wire encoding)
 
-channel membership becomes Event objects of type membership.add/remove
+**Status:** Draft 0.4 (Relay 2.0 architecture + v1.4-1/1.5 normative HTTP and object encoding; **MUST**/**MUST NOT** in this document are as stated unless an erratum supersedes them).
 
-action.* events remain Event objects
+**Conventions (normative keywords):** In **narrative** text, **MUST**, **MUST NOT**, and **SHOULD** are **bold** when used as **normative** keywords. In **markdown** **tables**, those words are **unbolded** for readability (same meaning).
 
-feed definitions become ViewDefinition state objects
+**Relay 2.0** organizes the protocol in **two** **layers** of **meaning**:
 
-Relay 2.0 Core Protocol Specification
+1. **Truth layer** — cryptographically **signed**, **content-addressed** **facts**: **Identity**, **Event** (append-only log), **State** (authoritative mutable object), **Attestation** (claims), and snapshot-style checkpoints where used.
+2. **View layer** — **deterministic** **projections** over the Truth layer: feeds, ordered lists, reducers (**§17.10**), recompute (**§17.11**). The **ViewDefinition** is concretely **`relay.feed.definition.v1`** state (**§11.1**) with **`sources`** + **`reduce`** + **`params`**. **Optional** **view** **execution** over HTTP (**`GET` `/view/.../run` **, ** **§0.3** **) ** may ** be ** **advertised** ** in ** **`/.well-known/relay-capabilities.json` ** as **`endpoints.view_run` **( ** **§8.1** **) **; ** **when** ** **absent** **, ** **verifiers** ** **recompute** ** from ** **§17** ** **fetches** **. **
 
-Status: Draft 0.3
-Architecture: Two-layer (Truth Layer + View Layer)
-Core Primitives: 5 (Truth) + 1 (View)
+The **body** of this document uses the same **three-part** *organization* as v1.4-1 for editing continuity:
 
-Preamble: Design Philosophy
+1. **Part I** — Wire protocol + APIs (Truth + View wiring)
+2. **Part II** — Reference server + relay implementation (non-normative reference)
+3. **Part III** — Client architecture (non-normative reference)
 
-Relay 2.0 defines what is true, not how it is presented.
+## 0. Relay 2.0 model (read this first)
 
-Truth Layer → cryptographically verifiable facts
-View Layer → deterministic computation over facts
+**Status (this section):** Draft 0.4 — two-layer **architecture** (Truth Layer + View Layer), **5** truth-facing primitives + **1** view entry point (**ViewDefinition**), with **v1.4-1** as the **normative** **HTTP** and **envelope** **encoding** in Parts I+ below.
 
-Everything else (feeds, moderation, agents, discovery) is a View.
+**Design rule:** Relay 2.0 defines **what is true** and **what can be derived**, not how UIs are styled. Presentation, ranking, and most product behavior are **Views** (deterministic over explicit **boundaries**).
 
-Part I: Truth Layer
-1. Identity
+### 0.1 Migration (from v1.4 naming)
+
+| v1.4 / v1.5 in this spec | Relay 2.0 concept |
+| --- | --- |
+| **Log** event | **Event** (`relay.event.v1` **role**; **wire** in **§10** uses **`ts`**, **`prev`**, not a top-level **`kind`:**) |
+| **State** object | **State** (`relay.state.v1` **role**; **wire** in **§11**) |
+| **Channel** config / metadata | **State** with a channel `type` (see **§13**) |
+| **membership.*** on log | **Event** types (same `type` **strings**) |
+| **action.*** (request, commit, result) | **Event** types (Appendix C) |
+| **`relay.feed.definition.v1`** | **ViewDefinition** — **signed** **State** that names **inputs** and a **versioned** **reduce** **function** |
+| v1 **`prev`** | **2.0** **parents** (often **one** **parent**); **v1.4-1** **wire** **unchanged** |
+
+**Terminology (non-normative):** On the **v1** **wire** (**§10**), the **event** **predecessor** is the **single** field **`prev`**. In **Relay** **2.0** **sketches** (**§0.5**), the **abstract** **form** is **`parents`** (a **list**). The **mapping** **row** **in** **the** **table** **above** **covers** **this:** for **a** **linear** **chain,** **`prev`** **( **or** **`null`** **for** **the** **genesis** **head** **) **is** **the** **v1** **encoding** **of** **a** **single** **parent;** **`parents`** **generalizes** **to** **one** **or** **more** **parents** **( **forks** **or** **future** **DAG** **semantics** **) **without** **changing** **v1** **envelopes** **on** **existing** **deployments** **. **
+
+### 0.2 Truth primitives (2.0)
+
+* **Identity** — **§8**; **public** **keys** and **`actor_id`** (**§4.3**).
+* **Event** — **immutable** **append** **per** **actor**; **§10**, **POST** **§16.3**, **GET** **§17.3**–**§17.4**.
+* **State** — **versioned** **authoritative** **object**; **§11**, **§16.1**, **§17.5**.
+* **Snapshot** (where offered) — **verifiable** **checkpoints**; `relay.snapshot.v1` **`scope`** is a **composable** **filter** object (**§0.5**); **compare** only with **same** **`scope`**, **`as_of`**, and **ordering**; **MUST** **not** be **treated** as **interchangeable** with **arbitrary** **non-snapshot** **boundaries** (**§0.7**).
+* **Attestation** — **§6**; **MUST** **not** **override** **Event** / **State** **facts**; **Relay 2.0** **`claim`** **classification** (**§6.2.0**).
+* **Verifiability profile** — **§0.8**; implementations **MUST** **declare** **`relay.profile.minimal`** or **`relay.profile.auditable`** (or both if multiple surfaces exist).
+
+### 0.3 View layer (2.0)
+
+* **ViewDefinition (normative mapping)** — **MUST** be **implemented** **only** as **signed** **State** with **`type`:** **`relay.feed.definition.v1`** (**§11.1**). **No** **alternate** **protocol-level** **representation** **permitted**; **wire** **fields** are **`sources`**, **`reduce`**, optional **`params`**.
+* **Boundary** — **Single** **normative** **definition** is **§0.6**; **v1.4-1** **recompute** / **audit** **advice** in **§17.11** **MUST** be **read** in **light** of **§0.6**–**§0.7** for **2.0** **determinism** **claims**.
+* **Target** **REST** (2.0 **sketch**, **not** **required** **on** **the** **wire** **today**): **`GET` `/view/{id}/run?boundary=…`**; **deployed** **origins** use **`/actors/...`** **paths** in **§16**–**§17**. ** **Discovery** **: ** **optional** **`endpoints.view_run` ** in **`/.well-known/relay-capabilities.json` **( **§8.1** **) ** **MAY** ** advertise ** a ** **template** ** URL ** for ** this ** **shape** **; ** when ** **absent** **, ** **clients** **MUST** ** **not** ** **assume** ** the ** **origin** ** **implements** ** **`GET` `/view/.../run` ** and ** **MUST** ** **fall** ** **back** ** to ** **recompute** ** from ** **§17.10** **–** **§17.11** **. **
+
+### 0.4 API mapping (2.0 target vs this document’s HTTP)
+
+| 2.0 **target** | **Normative** **v1.4-1** **surface** (this spec) |
+| --- | --- |
+| `POST /event` | `POST /actors/{actor_id}/log` (append **Event** **envelope**) |
+| `GET /event/{id}` | `GET /actors/.../log/events/{event_id}` |
+| `PUT` / `GET` `/state/...` | `PUT` / `GET` `/actors/.../state/...` |
+| `GET /view/.../run` | **Not** a **separate** **MUST**; use **recompute** from **§17.10** + **fetches** (**§17.11**). |
+
+### 0.5 Canonical JSON sketches (2.0 target; **not** v1.4-1 on-the-wire)
+
+*Normative machine rules for `relay.snapshot.v1` **scope** and for **Boundary** are **§0.5** (scope shape in sketches below), **§0.6**, and **§0.7**.*
+
+The **objects** **below** are **reference** **shapes** for **new** **implementations** and **for** **mapping** **mental** **models** **to** **§8**, **§10**, **§11** **( **v1** **envelopes** **)**. **Field** **names** **and** **required** **keys** **on** **the** **wire** **remain** **exactly** **as** in **the** **numbered** **sections** **(Part** **I) **.
+
+#### Identity (2.0 sketch)
+
+```json
 {
   "kind": "relay.identity.v1",
   "id": "relay:actor:multihash(public_key)",
@@ -35,16 +77,13 @@ Part I: Truth Layer
   "created_at": "2026-04-22T00:00:00Z",
   "sig": "base64(signature)"
 }
+```
 
-Rules
-id = multihash(SHA-256(public_key))
-Identity contains no economic or reputation data
-Signature MUST verify
+**Rules (2.0):** `id` = **multihash**(**SHA-256**(**public_key**)) **(see** **§4.3) **; ** no **economic** **/ ** **reputation** at **this** **layer**; **`sig` **MUST** **verify**.
 
-2. Event
+#### Event (2.0 sketch; v1 **§10** uses `prev`, `ts`, …)
 
-Immutable fact.
-
+```json
 {
   "kind": "relay.event.v1",
   "id": "relay:event:multihash(content)",
@@ -55,16 +94,15 @@ Immutable fact.
   "timestamp": "2026-04-22T00:00:00Z",
   "sig": "base64(signature)"
 }
+```
 
-Rules
-Content-addressed
-Immutable
-parents MAY be unresolved at append time
-Verifiers MUST treat unresolved parents as unverified until fetched
-3. State
+**Rules (2.0):** **content-addressed**; **immutable**; **`parents` **MAY** be **unresolved** at **append**; **verifiers** **MUST** treat **unresolved** **parents** as **unverified** **until** **fetched**.
 
-Authoritative “current truth”.
+**Unresolved** **parents** **( ** **orphan** ** **state** **) **: ** if **, ** after ** **reasonable** ** **fetch** ** **attempts** **( ** **client** **/ **indexer** **/ ** **origin** ** **policy** **; ** the ** **protocol** ** does ** **not** ** **require** ** **global** ** **liveness** ** or ** a ** **single** ** **global** ** **registry** ** of ** **events** ** ) **, ** a ** **listed** ** **parent** ** **id** ** **cannot** ** **be** ** **resolved** **, ** the ** **event** ** is ** **orphaned** ** in ** that ** **verifier'**s** ** **view** **. ** An ** **orphan** ** **MUST** **not** be ** **treated** ** as ** **cryptographically** ** **linked** ** to ** a ** **full** ** **parent** ** **chain** **. ** **Orphaned** ** **events** **MAY** be ** **shown** ** with ** a ** **warning** **, ** **stored** ** **for** ** **audit** **, ** or ** **excluded** ** from ** **deterministic** ** **Views** **( ** **§0.6** ** ) **. ** **Absence** ** of ** a ** **parent** ** is ** **not** ** by ** **itself** ** **proof** ** the ** **child** ** **is** ** **invalid** **( **it** ** may ** be ** **un-** **replicated** **, ** **retained** ** **only** ** **elsewhere** **, ** or ** **temporarily** ** **unavailable** ** ) **. **
 
+#### State (2.0 sketch; v1 **§11** `created_at` / `updated_at`, …)
+
+```json
 {
   "kind": "relay.state.v1",
   "id": "relay:state:user-defined",
@@ -76,27 +114,20 @@ Authoritative “current truth”.
   "timestamp": "2026-04-22T00:00:00Z",
   "sig": "base64(signature)"
 }
+```
 
-Relationship to Event
+| Concept | Meaning |
+| --- | --- |
+| **Event** | What happened (audit) |
+| **State** | What is true now (read path) |
 
-| Concept | Meaning          |
-| ------- | ---------------- |
-| Event   | What happened    |
-| State   | What is true now |
+**Rules (2.0):** **`version` **MUST** **increment**; **State** **is** **authoritative** for **reads**; **Event** **chain** **is** **authoritative** for **audit**; where **both** **exist, ** **State** **SHOULD** be **derivable** from **Event** **history** **( **profiles** **MAY** **require** **stricter** **rules** **)**.
 
+#### Snapshot (2.0 sketch)
 
-Rules
-version MUST increment
-State is authoritative for reads
-Event chain is authoritative for audit
-Audit Guarantee (Updated)
-If both exist, State SHOULD be derivable from Event history
-Profiles MAY require strict derivability (future extension)
+`relay.snapshot.v1` **MUST** carry **`scope`** as a **closed**, **composable** **filter** object (not a free-form `scope.kind` / `value` pair). **Removed:** **`actor_prefix`** (ambiguous).
 
-4. Snapshot
-
-Verifiable checkpoint over State.
-
+```json
 {
   "kind": "relay.snapshot.v1",
   "id": "relay:snapshot:multihash(root_hash)",
@@ -106,66 +137,110 @@ Verifiable checkpoint over State.
   "as_of": "2026-04-22T00:00:00Z",
   "partial": false,
   "scope": {
-    "kind": "full | actor_prefix | type_filter | id_range",
-    "value": {}
+    "actors": ["relay:actor:abc"],
+    "types": ["post"],
+    "id_range": {
+      "from": "relay:state:...",
+      "to": "relay:state:..."
+    }
   },
   "sig": "base64(signature)"
 }
+```
 
-Snapshot Scope (NEW — Critical Fix)
-Rules
-scope MUST define exactly what set of state objects is included
-If partial = false, scope.kind MUST be "full"
-If partial = true, scope MUST fully describe subset semantics
-Examples
-Full snapshot
+**Top-level `relay.snapshot.v1` (sketch) — `actor` (normative):**
 
-"scope": { "kind": "full" }
+| Field | Type | Semantics |
+| --- | --- | --- |
+| `actor` | string | MUST be `relay:actor:…` for the **signer** (entity that **created** the snapshot and whose key verifies `sig`). **Origin** snapshots: the origin’s actor. **Mirror** / **indexer**: that service’s actor. Authority to trust the cut comes from `sig` and `scope` / `as_of`, not from `actor` matching every included state row’s `actor_id`. |
 
-Actor-scoped
-"scope": {
-  "kind": "actor_prefix",
-  "value": { "actor_id": "relay:actor:abc" }
-}
-Type filter
-"scope": {
-  "kind": "type_filter",
-  "value": { "type": "post" }
-}
-Snapshot Comparability Rules (NEW)
+**`scope` subobject** (and **the** **same** **keys** **when** ** used ** **in** ** **Boundary** **`state_scope` **) **: **
 
-Two snapshots are comparable iff:
+| Field | Type | Semantics |
+| --- | --- | --- |
+| `actors` | array of string | **Exact** **match** on `actor_id` (state owner / publisher as defined for the state object). |
+| `types` | array of string | **Exact** **match** on state **`type`**. MUST NOT use partial or prefix matching. |
+| `id_range` | object | Inclusive interval over `state.id`: compare endpoints in UTF-8 **byte** lexicographic order (byte-by-byte), not Unicode scalar order, unless a profile says otherwise. For ASCII-only ids this matches JSON key ordering in §4.1; for non-ASCII, byte order remains normative. `from` and `to` MUST define a closed interval (both ends included). If `from` is after `to` in that order, the interval is empty and `id_range` MUST be rejected as invalid. |
 
-same scope
-same as_of
-same canonical ordering
+**Examples (non-normative):** **In** **ASCII,** `relay:state:aaa` ** **precedes** **`relay:state:aab` **in** **UTF-** **8** **byte** **order. ** Comparing **`state:e`** **and** **`state:é`**: ** the ** **first** ** **differing** ** **bytes** ** are **`0x65`** **vs** **`0xC3`**, **so** ** **order** ** **follows** ** **raw** ** **UTF-** **8** ** **bytes** ** of ** the ** full **`id`**,** **not** ** **Unicode** ** **scalar** ** **value** ** of** ** a** ** **suffix** ** **code** ** point** ** alone. **
 
-Otherwise:
+**Scope evaluation (normative):**
 
-MUST NOT be assumed equivalent
-MUST NOT be used interchangeably in deterministic views
-Merkle Construction
-Sorted lexicographically by id
-Leaf = SHA-256(canonical state JSON)
-Tree MUST be deterministic
-Proof
+* **Conjunction (AND):** `scope` **MUST** be **interpreted** as the **conjunction** of **all** **present** **filters**; a **key** **absent** **or** an **empty** **array** **for** **`actors` **/ ** `types` **imposes** **no** **constraint** **in** **that** **dimension** **( **except** **as** **required** **by** **`partial` **, ** **below** **). **
+* **When** **`partial` **is** **`true`**, **`scope` **MUST** **not** be **`{}` **; **it** **MUST** **contain** **at** **least** **one** **constraining** **field** ( **non-empty** **`actors` **or** **`types` **, ** **or** **valid** **`id_range` **with** **`from` **≤** **`to` **).**
+* **When** **`partial` **is** **`false`**, the **snapshot** is **a** **“** **full** **”** **cut** **within** **a** **defined** **authority** **domain** ( **not** **unbounded** **“** **entire** **network** **”** ) **. ** A **“** **full** **”** **snapshot** **MUST** **name** that ** domain **: **( **1** ) ** an ** **origin** **( **e.g. ** the ** **signing** ** **`actor`** **on** ** the **`relay.snapshot.v1` ** object ** or ** a ** **profile-** **defined ** **`origin` **/ **`authority` ** field ** ) **, ** and ** ( **2** ) ** a ** **declared** ** membership** ** universe **: ** e.g. ** **all** ** **state** ** **objects** ** **that** ** **origin** ** **authorizes** ** **for** ** that ** **snapshot** ** at **`as_of`**, ** **optionally** ** **narrowed** ** by ** **`scope` **( **`scope` **MAY** be **`{}` **( **no** **additional** **AND** **filters** ) **, ** or ** **list** ** explicit** ** `actors` ** / **`types` ** / **`id_range` ** ). ** “** **Full** **” ** is ** **always** ** **relative** ** to ** that ** **authority** ** + **`as_of` ** + ** **`scope` **; ** it ** is ** **not** ** an ** **absolute** ** “** **every** ** **object** ** **in** ** **the** ** **federation** **. **
+
+**Canonical evaluation:** Implementations **MUST** **apply** **filters** in **any** **order** (**order-independent**). **Identical** **`scope` **+ **`as_of` **+ **same** **state** **set** **MUST** **yield** **identical** **membership** for **the** **snapshot** **( **before** **Merkle** **)**. **
+
+**Comparability:** Two **snapshots** are **portably** **comparable** **for** **deterministic** **View** **use** **iff** **they** have **the** **same** **canonical** **`scope` **object, **the** **same** **`as_of`**, and **the** **same** **membership** **set** **and** **Merkle** **construction** **per** **§0.5.1** — **in** **particular** **the** **same** **leaf** **ordering** **( **sort** **by** **`id`** **) ** and **the** **same** **leaf** **/ ** **internal** **/ ** **root** **hash** **rules**. **MUST** **not** **assume** **equivalence** **otherwise**. **
+
+**Proof** (sketch object; **normative** **merkle** **/ ** **proof** **bytes** in **§0.5.1** ) **:**
+
+```json
 {
   "kind": "relay.snapshot.proof.v1",
   "snapshot_id": "...",
   "state_id": "...",
-  "merkle_path": [...],
   "leaf_index": 42,
-  "root_hash": "..."
+  "merkle_path": ["hex64 of 32 bytes", "..."],
+  "path_bits": [0, 1, 0],
+  "root_hash": "hex64 of 32 bytes"
 }
-5. Attestation
+```
 
-Constrained claim layer.
+#### 0.5.1 Snapshot Merkle tree and membership proof (normative)
 
+**Alignment** with **§4.1** **( **and** **the** **exclusion** **of** **signature** **fields** **from** **signed** **/ ** **hashed** **material** **) **: ** a ** **leaf** **hash** **MUST** ** be ** **SHA-256**(**UTF-8** **bytes** **of** **the** **canonical** **state** **JSON** **( **per ** **§4.1** **) ** for ** the ** **state** ** object **, ** with ** the ** same ** **outer** ** **`sig`** ** ( **and** ** any** ** other ** **field** ** **excluded** ** for ** **signing** ** / **`object_id`** ** per ** **§4.1** ** and ** **§4.2** **) ** as ** for ** **that** ** object’s** ** **normal** ** **hash** ** / ** **sign** ** **pipeline** **. ** **MUST** ** **not** ** **mix** ** in ** a ** **different** ** **canonical** ** **subset** ** ( **e.g. ** **including** ** **`sig`**) ** for ** **Merkle** ** **leaves** ** **only** **. **
+
+**Domain-separated** **padding** **hash** ( **synthetic** **sibling** **) **: **
+
+`H_pad` **=** **SHA-256**(**UTF-8** **bytes** **of** ** the ** **literal** ** string **`relay.merkle.pad.v1`**) ** ( **32** ** **bytes** ** output ** ). **
+
+**Tree** **construction** ( **binary** **Merkle** **) **: **
+
+1. ** **Collect** ** **N** ** **state** ** **objects** ** **in** ** the ** **snapshot** ** **membership** ** **after** ** **§0.5** ** **scope** ** / ** **`as_of` ** **( **the** ** **same** ** **set** ** ** used** ** for ** **comparability** ** above **). **
+2. ** **Sort** ** them ** **by** **`state.id` ** string ** in ** **UTF-8** ** **byte** ** **lexicographic** ** **ascending** ** **order** ** ( **same** ** order ** as ** **§0.5** ** **`id_range` ** and ** **§0.5.1** ** **table** ** in ** **§0.5** ** ) **. **
+3. ** **For** ** each ** **object** **, ** **compute** ** the ** **leaf** ** **hash** **`L[i]`** ** as ** **above** ** for ** **i** ** = ** **0** ** .. ** **N** **−** **1** **. **
+4. ** **Build** ** **a** ** **level** ** **list** ** **starting** ** with **`[L[0], …, L[N-1]]`**. ** **While** ** **the** ** **list** ** **length** ** **M** ** **>** ** **1** **: ** if ** **M** ** is ** **odd** **, ** **append** **`H_pad` ** as ** the ** **last** ** **element** **( **synthetic** ** **right** ** **sibling** ** in ** the ** **pairing** **order **) **. ** **Then** ** **pair** ** **adjacent** ** **elements** ** **( **0**-**1** **, ** **2**-**3** **, ** **…** **) **: ** for ** each ** **pair** **(left,** **right)** **, ** **parent** **=** **SHA-256**(**left** **`||`** **right** **) ** where ** **left** ** and ** **right** ** are ** the ** **raw** ** **32**-** **byte** ** **digests** **. ** **Replace** ** the ** **level** ** with ** the ** **list** ** of ** **parents** **. **
+5. ** **The** ** **single** ** **remaining** ** **32**-** **byte** ** **value** ** is ** the ** **Merkle** ** **root** **. ** The **`root_hash` ** field ** in **`relay.snapshot.v1` ** ( **and** **` relay.snapshot.proof.v1` **) **MUST** ** **equal** ** that ** **root** ** ( **e.g. ** **lower**-** **hex** ** **encoding** ** in ** **JSON** ** as ** **elsewhere** **) **. **
+
+**`relay.snapshot.proof.v1` ** **fields** **( **in ** **addition** ** to **`kind` **, **`snapshot_id` **, **`state_id` **) **: **
+
+| Field | Semantics |
+| --- | --- |
+| `leaf_index` | **0**-** **based** ** **index** ** of **`state_id` ** in ** the ** **§0.5.1** ** **sorted** ** **`id` ** list ** **( **the** ** **same** ** **order** ** as ** **tree** ** **construction** **). ** |
+| `merkle_path` | **JSON** ** **array** ** of ** **length** ** **=** ** **tree** ** **depth** **( **not** ** **counting** ** **the** ** **leaf** **) **. ** The **`i` **-** **th** ** **element** ** is ** the ** **32**-** **byte** ** **sibling** ** **hash** ** at ** **level** ** **`i` **( **sibling** ** of ** the ** **node** ** **containing** ** the ** **current** ** **hash** ** on ** the ** **path** ** to ** the ** **root** **) **, ** **encoded** ** as ** **64**-** **character** ** **lowercase** ** **hex** **( **or** ** **a** ** **profile**-** **defined** ** **base64** ** if ** **documented** **) **. ** |
+| `path_bits` | Same length as `merkle_path`. Bit `i` MUST be 0 if the path node at that level was the left child (parent = SHA-256 of path-node hash concatenated with sibling), and 1 if it was the right child (parent = SHA-256 of sibling concatenated with path-node hash), when walking from leaf to root. |
+| `root_hash` | ** **Expected** ** **Merkle** ** **root** **( **e.g. ** **hex ** **as ** in ** the ** **parent** ** **snapshot** **) **; ** **verifier** ** **MUST** ** **compare** ** after ** **recompute** **. ** |
+
+**Verify** ( **normative** **) **: ** **Given** ** a ** **fetched** ** **state** ** object ** **, ** **recompute** **`H_leaf` ** per ** **the** ** **leaf** ** **rule** ** above **; ** if ** the ** **object’s** **`id` ** string ** **does** ** **not** ** **equal** **`state_id` **( **after** ** **the** ** **same** ** **id** ** **conventions** ** as ** **the** ** **deployment** **) **, ** **reject** **. ** **Let** **`h` **= **`H_leaf` **. ** **For** ** **i** ** = ** **0** ** .. ** **len**(**`merkle_path`**) **−** **1** **: ** **decode** **`s` ** as ** **32** ** **raw** ** **bytes** ** from **`merkle_path[i]`** **; ** if **`path_bits[i]`** ** = ** **0** **, ** set **`h` ** **←** ** **SHA-256**(**`h` ** `||` **`s` **) **; ** else **`h` ** **←** ** **SHA-256**(**`s` ** `||` **`h`**) **. ** **MUST** ** **require** **`h` ** **equals** ** the ** **snapshot** ** **root** **( **e.g. ** **compare** ** to ** **`root_hash` ** in ** the ** **proof** ** and ** **the** **`relay.snapshot.v1` ** **object** **) **. **
+
+**Pseudocode (non-normative,** **equivalent** **to** **the** **verify** **steps** ** above **) **: **
+
+```text
+function verify_merkle_membership(state, state_id, merkle_path, path_bits, root_expected):
+  if state.id != state_id: fail  // same string conventions as snapshot / deployment
+  h = H_leaf(state)                // per leaf rule above; 32 bytes
+  assert len(merkle_path) == len(path_bits)
+  for i from 0 to len(merkle_path) - 1:
+    s = decode_32_bytes(merkle_path[i])
+    if path_bits[i] == 0:  // current node was left child: parent = H(left || s)
+      h = SHA256(h || s)
+    else:                    // current node was right child: parent = H(s || h)
+      h = SHA256(s || h)
+  if h != decode_root_bytes(root_expected): fail
+  ok
+```
+
+#### Attestation (2.0 sketch) — **normative** **`claim`** **shape** **aligns** **§6.2.0**; **§6.2** **shows** **v1.2** **trust** **wire** (flat **`type`**).
+
+```json
 {
   "kind": "relay.attestation.v1",
   "id": "...",
   "issuer": "relay:actor:abc",
   "claim": {
+    "category": "trust | snapshot | view",
     "type": "string",
     "payload": {}
   },
@@ -173,134 +248,180 @@ Constrained claim layer.
   "supersedes": "...",
   "sig": "..."
 }
-Rules
-MUST NOT override Truth Layer primitives
-MAY add claims, evidence, or relationships
-Unknown types MUST be ignored safely
-Part II: View Layer
-6. ViewDefinition
+```
 
-Deterministic computation over Truth.
+| Category | Purpose |
+| --- | --- |
+| `trust` | Identity or reputation claims ( **includes** **wire** **types** in **§6.3** **when** **normalized** **per** **§6.2.0** **). |
+| `snapshot` | Claims about **snapshot** **correctness** / **membership** **/ ** **root**. |
+| `view` | Claims about **computed** **View** **outputs** **( **e.g. ** **attested** **hashes** **)** . ** |
 
+**Rules (2.0):** **`claim.category` **MUST** **be** **present** **on** **Relay 2.0** **general** **attestations** **( **§6.2.0** **)** . ** **MUST** **not** **override** **Truth** **primitives**; **unknown** **`claim.type` **values** **within** **a** **known** **`category` **MUST** be **ignored** **safely** **( **extension** **policy** **)** . **
+
+#### ViewDefinition (2.0 sketch) — **wire** **MUST** **use** **`relay.feed.definition.v1`** (**§11.1**); **no** **`relay.view.definition.v1`** **or** **other** **parallel** **`type`**.
+
+```json
 {
   "kind": "relay.state.v1",
   "id": "relay:view:my_view",
-  "type": "relay.view.definition.v1",
+  "type": "relay.feed.definition.v1",
   "version": 3,
   "data": {
-    "inputs": [...],
-    "function": "relay.reduce.reverse_chronological.v1",
-    "parameters": {}
+    "sources": [],
+    "reduce": "relay.reduce.reverse_chronological.v1",
+    "params": {}
   },
   "sig": "..."
 }
-Determinism Contract (Strengthened)
+```
 
-A View is deterministic iff:
+**Determinism (2.0):** **Formal** **definition** **—** **§0.6** **( **pure** **View** **function** **)** . ** **At** **minimum** **a** **View** **evaluation** **is** **deterministically** **equivalent** **iff** **same** **top-level** **ViewDefinition** **`version`**, **same** ** **explicit** ** **versions** **( **or** ** **ids** **)** ** for** **all** ** **nested** ** **referenced** ** ** `kind: "feed"` ** **ViewDefinitions** **( ** **§0.6** ** ) **, ** **same** ** **Boundary** **( ** **§0.6** ** ) **, ** and** **same** ** **resolved** ** **input** ** **data** **( ** see ** **§0.6** ** ) **. **
 
-ViewDefinition version is fixed
-All inputs are explicitly bounded
-Function is pure
-Input data is fully resolvable
-Boundary Requirement (Critical Rule)
+**Boundary** ( **normative** **object** **—** **full** **rules** **§0.6** **); **illustration** **only** **:**
 
-Every /view/run MUST specify a boundary:
-
+```json
 {
-  "snapshot": "relay:snapshot:abc"
-}
-
-OR:
-
-{
+  "snapshot": "relay:snapshot:...",
   "event_range": {
-    "from": "relay:event:1",
-    "to": "relay:event:100"
-  }
+    "actor": "relay:actor:abc",
+    "from": "relay:event:…",
+    "to": "relay:event:…"
+  },
+  "state_scope": { "actors": ["relay:actor:abc"], "types": ["post"] }
 }
-Without boundary:
-result = latest available
-result = NOT reproducible
-result = NOT comparable
+```
 
-Input Kinds
-| Kind       | Meaning           |
-| ---------- | ----------------- |
-| actor_log  | events from actor |
-| snapshot   | state set         |
-| event_type | filtered events   |
-| view       | nested view       |
+`event_range` (when present) **MUST** **name** a **`actor`** ( **or** **equivalent** **per-source** **key** in **a** **profile** **) **: **`from` **and** **`to` **MUST** **delimit** **inclusive** **endpoints** **in** **the** **per-**actor **append-only** **log** **order** **( **the** **order** **induced** **by** **that** **actor’s** ** `prev` ** **chain** ** / ** **origin**- **stated** **log** **sequence** **) **, ** not ** **a** **global** **order** **on** **event** **id** **strings** **( **id** **hashes** **are** **not** **a** **causal** **total** **order** **across** **the** **network** **). ** **Option** **B** **( **if** **used** **by** **a** **profile** **, ** **not** **mixed** **with** **A** **on** **the** **same** **range** **object** **): ** **a** **defined** **total** **order** **( **e.g. ** **( **`ts` **,** **`event_id` **) ** **lexicographic** **tie-break** **) ** **MUST** **be** **stated** **in** **that** **profile** **. **
 
+Without a **valid** **Boundary** (**§0.6**), a **stated** **result** **is** **“** **latest** **available** **”** **/ ** **best-effort** **—** **not** **reproducible** **/ ** **not** **audited** **( **§0.3** **, ** **§17.11** **)**. **
 
-Core Functions (Strict Set)
-| Function              | Description      |
-| --------------------- | ---------------- |
-| chronological         | oldest first     |
-| reverse_chronological | newest first     |
-| union                 | set union        |
-| intersection          | set intersection |
+**View run** (response **sketch**):
 
-View Execution
-
-GET /view/{id}/run?boundary=...
-
+```json
 {
   "view_id": "...",
   "definition_version": 3,
-  "boundary": {...},
-  "result": [...],
+  "boundary": {},
+  "result": [],
   "result_count": 100,
-  "attestation": {
-    "root_hash": "...",
-    "proof_available": true
+  "attestation": { "root_hash": "...", "proof_available": true }
+}
+```
+
+**Input kinds** and **core** **reduce** **families** **( **2.0** **naming** **— ** **see** **§17.10** **for** **normative** **ids** **)**:
+
+| Input kind (2.0) | Meaning |
+| --- | --- |
+| `actor_log` | Events from an actor |
+| `snapshot` | State set (bounded) |
+| `event_type` | Filtered events |
+| `view` | Nested view |
+
+| Function family | Description |
+| --- | --- |
+| chronological / reverse_chronological | Order |
+| union / intersection | Set ops |
+
+#### Key guarantees (summary)
+
+* **Truth:** **Signed**, **addressable**; **State** **for** **reads**; **Events** **for** **audit** (**Part** **I**).
+* **View:** **Deterministic** **only** **with** **Boundary** **§0.6**; **ViewDefinition** **only** **`relay.feed.definition.v1`** (**§0.3**); **recomputable** (**§17.11**).
+* **Snapshot:** **Merkle**-**verifiable** **root**; **`scope`** **filter** **object** **§0.5**; **not** **interchangeable** **with** **arbitrary** **non-snapshot** **boundaries** (**§0.7**).
+
+### 0.6 Boundary definition (normative)
+
+A **Boundary** **defines** **the** **dataset** ** over **which** a **View** **is** **evaluated** **and** **over** **which** **determinism** **and** **audit** **claims** **MUST** **be** **scoped** **. **
+
+**Finite** **input** **for** **determinism** **( **replaces** **unqualified** **“** **sufficient** **constraint** **”** **):** A **Boundary** **is** **valid** **for** **deterministic** **/** **reproducible** **/** **fully** **verifiable** **claims** **only** **if** **it** **describes** **a** **finite** **set** **of** **inputs** **( **a** **verifier** **with** **unbounded** **resources** **could** **enumerate** **the** **set** **and** **finish** **)**. **
+
+**MUST** **include** **at** **least** **one** **of** **the** **following** **finite** **pins** ( **unbounded** **filter-only** **boundaries** **are** **invalid** **for** **deterministic** **claims** **):**
+
+1. **`snapshot` **— **a ** **`relay.snapshot.v1` ** id **( **or** **profile**- **defined** **snapshot** **ref** **)** ** that ** **fixes** ** **membership** ** per ** **§0.5** **/ ** **§0.7** **;** **or**
+2. **bounded** **`event_range` **— **inclusive** **endpoints** **in** **per-actor** **log** **order** **( ** **§0.6.1** ** ) ** on ** a ** **finite** ** **window** **;** **or**
+3. **bounded** **`id_range` **( **in** ** **`state_scope` ** or ** **where** ** the ** **profile** ** **places** ** **it** **)**— **a ** **closed** ** **lexicographic** ** **interval** ** over **`state.id` ** as ** in ** **§0.5** **.**
+
+**`state_scope` **( **or** **filters** **alone** **)** **without** **( **1** ) **–** **( **3** ) ** ( **e.g. ** ** `{ "state_scope": { "types": ["post"] } }` ** with ** no ** **time** **, ** **snapshot** **, ** **or** ** **bounded** ** **range** **)** ** does ** **not** ** **define** ** a ** **finite** ** **dataset** **: ** it ** is ** **not** ** **valid** ** for ** **stated** ** **determinism** **( **it** **MAY** ** still ** be ** **used** ** for ** **best-effort** ** **/** ** heuristics** **; ** see ** **§0.3** ** ) **. **
+
+**Boundary object** ( **all** **top-level** **keys** **optional** **unless** **a** **profile** **requires** **a** **specific** **pin** **, ** **subject** **to** **the** **finite-input** ** rules ** **above** ** ) **: **
+
+```json
+{
+  "snapshot": "relay:snapshot:...",
+  "event_range": {
+    "actor": "relay:actor:...",
+    "from": "relay:event:...",
+    "to": "relay:event:..."
+  },
+  "state_scope": {
+    "actors": ["relay:actor:abc"],
+    "types": ["post"],
+    "id_range": { "from": "relay:state:...", "to": "relay:state:..." }
   }
 }
-Part III: Key Guarantees
+```
 
-Truth Guarantees
-All primitives are signed
-All objects are addressable
-State is authoritative
-Events are auditable
+**`state_scope`** **uses** **the** **same** **filter** **semantics** **as** **snapshot** **`scope`** **( **AND** **of** **present** **filters** **; ** **§0.5** **table** **)** . **
 
-View Guarantees
-Deterministic with boundary
-Recomputable by any client
-Not trusted by origin alone
+**Rules:**
 
-Snapshot Guarantees
-Verifiable via Merkle root
-Scope explicitly defined
-Comparable only when scopes match
+* A **valid** **Boundary** **( ** for ** **determinism** ** ) **MUST** **fully** **constrain** **all** **inputs** **the** **ViewDefinition** **requires** **, ** **including** **: ** per-source** **log** **windows** **, ** **state** **heads** **, ** **the** ** **top-level** ** **ViewDefinition** ** **`version` **, ** and ** **explicit** ** **versions** ** for ** **every** ** **referenced** ** **nested** ** ** `kind: "feed"` ** / ** **ViewDefinition** ** ( **so** **recompute** ** does ** not ** **drift** ** on ** **silent** ** **definition** ** **upgrades** **; ** see ** **below** ** ) **, ** or ** a ** **pinning** ** **snapshot** **. **
+* A **Boundary** **MAY** **include** **a** **snapshot** **reference**, **one** **or** **more** **event** **ranges** **( **inclusive, ** **finite** **, ** **per-**actor ** **log** **order** **; ** **§0.6.1** **) **, ** and/or **state** **filter** **fields** **via** **`state_scope`**. **
+* A **Boundary** **is** **syntactically** **well-formed** **iff** **all** **referenced** **data** **is** **resolvable** **and** **all** **declared** **ranges** **are** **finite** **( **no** **unbounded** **“** **to** **” ** **=** ** infinity** **; ** no ** **open** **- ** **ended** ** **log** ** **windows** ** in ** a ** **determinism** ** **claim** ** ) **. **
 
-Part IV: API Summary
+**ViewDefinition** **version** **pinning** **( ** **nested** ** **views** ** ) **: ** All ** **referenced** ** **ViewDefinition** ** **State** ** objects ** **( **e.g. ** ** **`kind: "feed"`** ** **sources** **)** **MUST** ** be ** **resolved** ** at ** **explicit** ** **state** ** **`version` **s ** **( **or** ** **content** ** **ids** ** **under** ** **a** ** **profile** ** ) ** **named** ** in ** ** the ** **Boundary** ** or ** an ** **accompanying** ** **pin** ** list **: ** the ** **outer** ** **definition** ** **`version` ** **alone** ** is ** **not** ** **sufficient** ** if ** **nested** ** **definitions** ** **can** ** **mutate** ** **independently** **( ** see ** also ** **§0.1** ** commentary ** on ** **nested** ** **feeds** ** ) **. **
 
-| Method | Endpoint                        |
-| ------ | ------------------------------- |
-| GET    | /identity/{id}                  |
-| POST   | /identity                       |
-| POST   | /event                          |
-| GET    | /event/{id}                     |
-| PUT    | /state/{id}                     |
-| GET    | /state/{id}                     |
-| POST   | /snapshot                       |
-| GET    | /snapshot/{id}                  |
-| GET    | /snapshot/{id}/proof/{state_id} |
-| POST   | /attestation                    |
-| GET    | /attestation/{id}               |
-| GET    | /view/{id}/run                  |
+**Resource** **limits** ** and ** **honest** ** **claims** **: ** **Implementations** **MAY** ** impose ** **implementation** ** **limits** ** ( **e.g. ** ** **maximum** ** **snapshot** ** **object** ** **count** **, ** **truncation** ** **of** ** **fetched** ** **logs** ** ) **, ** but ** **MUST** ** **not** ** **assert** ** **a** ** **deterministic** ** **/ ** **fully** ** **verified** ** **result** ** for ** a ** **Boundary** ** they ** **cannot** ** ( **or** ** will ** not ** ) ** **fully** ** **verify** **; ** they ** **MUST** ** **reject** ** or ** **downgrade** ** the ** **claim** **( **e.g. ** ** to ** **best-effort** **, ** **§0.3** ** ) **. **
 
+**Determinism rule (Views):** Two **View** **evaluations** **MUST** be **treated** as **deterministically** **equivalent** **iff** **all** of **the** **following** **hold** **: ** the **same** **top-level** **ViewDefinition** **`version`**, the **same** **pinned** **versions** **( **or** ** **ids** **)** ** for ** **all** ** **nested** ** **ViewDefinitions** **, ** the **same** **Boundary** **value** ( **after** **canonicalization** **, ** **§0.6.1** **), ** and** **the** **same** **underlying** **resolved** **input** **bytes** **( **log** **events** **, ** **state** **objects** **)**. **
 
+### 0.6.1 Boundary object canonical form and `event_range` (normative)
 
+**Event** **range** **( ** `event_range` ** ) **, ** when ** used **, **MUST** ** be ** **interpreted** ** in ** **per-**actor ** **log** ** order** **( ** **§0.1** ** illustration **, ** **prev** **- ** **chain** ** / ** **origin** ** **order** ** ) **, ** and ** **MUST** ** include** **a** ** **`actor`** ** ( **or** ** **profile** **- ** **equivalent** ** ) **. **
 
+**Note** **( ** **multi-** **actor** ** **boundaries** ** ) **: ** **`event_range` ** **pins** ** are ** **per-** ** `actor` ** and ** are ** **not** ** **globally** ** **comparable** ** to ** one ** **another** **. ** A ** **boundary** ** that ** **lists** ** more ** than ** one ** **`event_range` ** ( ** **different** ** **`actor` ** **values** **) ** **names** ** a ** **product** ** of ** **per-** **actor** ** **windows** **, ** not ** a ** **single** ** **interval** ** in ** a ** **global** ** **event** **- ** **id** ** **order** **. **
 
-# Relay v1.4-1 / v1.5 (additive draft) Stack Spec
+**Boundary** **canonical** **form** ** for ** **comparing** ** or ** **hashing** ** **Boundary** ** **values** **( **e.g. ** **attestations** **, ** **caches** ** ) **: **
 
-This document defines the Relay stack in three layers:
+| Concern | Rule |
+| --- | --- |
+| Object key order | Object keys sorted in Unicode code point lexicographic order (same as §4.1). |
+| Arrays | Arrays whose order is not semantically significant (e.g. `actors`, `types` in filters) MUST be sorted lexicographically as JSON string values (NFC, §4.1.2) before comparison or hashing. Order-sensitive arrays, if any, MUST be defined by profile. |
+| `null` vs omitted | Optional keys with no value MUST be omitted. MUST NOT use JSON `null` in place of omission for canonical Boundaries. |
 
-1. Wire protocol + APIs (Part I)
-2. Reference server + relay implementation (Part II)
-3. Client architecture (Part III)
+**Boundary** ** **equality** **( **caching, ** **attestations** **, ** **fingerprints** ** ) **: ** two ** **semantically** ** **equivalent** ** **Boundary** ** **values** **MUST** ** have ** the ** same ** **bytes** ** after ** this ** **canonical** ** **form** ** and ** the ** **shared** ** **JSON** ** **rules** ** in ** **§4.1** **( ** **numbers** **, ** **strings** **, ** **NFC** **, ** **etc. ** ) **. **( ** The ** **Determinism** ** **rule** **( ** **Views** ** ) ** in ** **§0.6** ** is ** **unchanged; ** this ** **paragraph** ** is ** only ** the ** **hashing** ** **/ ** **compare** ** **spec** **. **)
+
+**View function purity (normative):** A **reducer** / **View** **function** **MUST** **not** **depend** **on**: **(1)** **current** **wall** **clock**, **`Date.now`**, or **any** **unspecified** **“** **now** **”** **( **time** **MAY** **appear** **only** **as** **part** **of** the **Boundary** **or** **input** **objects** **); ** **(2)** **non-deterministic** **randomness** **; ** **(3)** **external** **network** **calls** **; ** **(4)** **non-specified** **host** **or** **process** **state** **( **e.g. ** **unordered** **map** **iteration** **without** **canonical** **order** **). ** It **MUST** **operate** **only** **on** the **ViewDefinition** **and** **Boundary**-**defined** **inputs** and **MUST** **yield** **identical** **output** **for** **identical** **inputs** **. **
+
+**Forked** **actor** **logs** **( ** **normative, ** **ties** ** to ** **§17.10** **) **: ** If ** a ** **View** ** **input** ** **is** ** an ** **actor** ** **append-** ** **only** ** **log** ** **and** ** **the** ** **fetched** ** **events** ** **admit** ** **more** ** than ** one ** **head** ** **( **a ** **fork** **) **, ** the ** **deterministic** ** **reducer** ** **MUST** ** **follow** ** **§17.10** **( ** **Multiple** ** **heads** ** / ** **forks** **) **: ** **reject** ** **as** ** **ambiguous** ** **or** ** **apply** ** a ** **documented** ** **head** **-** ** **choice** ** **policy** **. **
+
+**Enforcement:** Implementations **MUST** **treat** **any** **violation** **as** **non-deterministic** **output** **. ** They **MUST** **not** **claim** **bit-for-bit** **equivalence** **or** **universal** **audit** **parity** **across** **deployments** **for** **non-deterministic** **outputs** **. **
+
+### 0.7 Snapshot and boundary (normative relationship)
+
+* A **Snapshot** is **a** **specialized** **form** of **constraint** **that** **can** **serve** as **( **or** **contribute** **to** **)** a **Boundary**, **but** **is** **not** **the** **only** **way** **to** **define** one **. **
+* A **Boundary** **MAY** **reference** a **snapshot** **`snapshot` **; **MAY** **define** **raw** **event** **windows** **with** **`event_range` **; **MAY** **define** **state** **filters** **with** **`state_scope` **( **independent** **of** **a** **snapshot** **or** **with** **it** **)**. **
+* A **Snapshot** **object** **implicitly** **fixes** a **state** **membership** **set** **( **constrained** **by** **`scope` **+ **`as_of` **) **. ** A **Boundary** **that** **sets** **`snapshot` ** **inherits** those **membership** **and** **temporal** **commitments** **( **`as_of` **, ** **filter** **semantics** **)** **. **
+* A **Boundary** **without** **`snapshot` ** **MUST** **define** **all** **required** **constraints** **explicitly** **( **e.g. ** **per-source** **heads** **+ ** **state** **filters** **)** in **a** **manner** **verifiable** **for** **the** **claim** **. **
+
+**Constraint:** Implementations **MUST** **not** **assume** **snapshot-** **pinned** **boundaries** and **unpinned** **range** / **state_scope**- **only** **boundaries** are **interchangeable** **for** **the** **same** **View** **without** **a** **proof** **( **e.g. ** **showing** **the** **same** **state** **set** **and** **event** **windows** **)**. **
+
+### 0.8 State and event verifiability profiles (normative)
+
+*These **verifiability** **profiles** (**minimal** / **auditable** **state** **wrt** **events**) are **orthogonal** **to** **Part** **I** **capability** **profiles** **( **e.g. ** **`relay.profile.social` **, ** **§2.1** **). ** A **single** **deployment** **MUST** **declare** **both** **when** **both** **axes** **apply** **. **
+
+Implementations **MUST** **declare** **at** **least** **one** **verifiability** **profile** **( **e.g. ** on **identity** **, ** **capabilities** **, ** or **a** **well-known** **document** **)** **. **
+
+| Profile | Requirement |
+| --- | --- |
+| **`relay.profile.minimal`** | **State** **MAY** **exist** without **a** **complete** **verifiable** **event** **history** on **that** **actor** ( **e.g. ** **migrated** **or** **origin**- **sourced** **only** **)**. ** |
+| **`relay.profile.auditable`** | **State** **MUST** be **derivable** **( **reconstructable** **)** from **a** **finite** **set** of **Event** **objects** **the** **client** **can** **fetch** and **the** **protocol** **rules** **allow** for **the** **state** **type** **. ** |
+
+**`relay.profile.auditable` (additional rules):**
+
+* **State** **MUST** **include** **parent** **( **e.g. ** **`prev` **- ** **linked** **or** **schema-specific** **)** **or** **equivalent** **references** such **that** **verifiers** **MAY** **reconstruct** **or** **verify** **derivation** **from** **events** **( **as** **defined** for **the** **state** **type** **)**. **
+* **Verifiers** **MUST** be **able** **to** **reconstruct** **the** **state** **or** **reject** **as** **non-auditable** when **reconstruction** **fails** **( **per** **local** **policy** **)**. **
+
+**Clients** **MUST** **respect** **the** **declared** **profile** when **deciding** **whether** **to** **show** **“** **verified** **”** **derivation** **vs** **“** **origin**- **attested** **only** **”** **. **
 
 **v1.4** extends **v1.3** (`Relay-Stack-Spec-v1-3.md`) with **additive** normative material for two protocol capabilities—**action events** (agent request/commit/result) and **deterministic feed definitions** (portable, verifiable views)—and **non-normative** ecosystem notes. Unless this document **explicitly** changes a rule, **v1.3** (and, where not superseded, **v1.2**) semantics **remain in force**. v1.4 **MUST** be read as a **superset** of the v1.3 body: **unchanged** sections (markings below) are **inherited** verbatim in intent; **new** or **replaced** paragraphs are **normative** where they use **MUST** / **MUST NOT**. Implementations that claim **v1.4** interop **MUST** support the **MUST** rules in **§4.3.1**, **§8.1**, **§13.1 (v1.3)**, **§13.4 (v1.4)**, **§11.1 (v1.4)**, **§17.10–§17.11 (v1.4)**, and **Appendix C (including v1.4 rows)**. Implementations that do **not** implement action or feed features **MUST** still **treat** unknown log `type` / state `type` as **optional** and **MUST** preserve **signed** data without corruption (**§10.2**, **§22.4**).
 
@@ -327,7 +448,7 @@ This document defines the Relay stack in three layers:
 | Topic | v1.4 deliverable | Where |
 | --- | --- | --- |
 | **Agent interaction (signed steps)** | Log types **`action.request`**, **`action.commit`**, **`action.result`**: requester → **commit** → **result** on defined logs; **commitment_hash** (SHA-256) binds **request** to **commit**; all steps **verifiable** with **Ed25519** per **§7** / log rules **§10**. | **§13.4**, **Appendix C (v1.4 rows)** |
-| **Portable deterministic feeds** | **State** type **`relay.feed.definition.v1`**: `sources` + `reduce` + optional `params`. **Reducers** are **versioned** identifiers, **pure** and **deterministic**; v1.4 **requires** **`relay.reduce.chronological.v1`** and **`relay.reduce.reverse_chronological.v1`**; others **§22** / extension registry. | **§11.1**, **§17.10** |
+| **Portable deterministic feeds / ViewDefinition** | **State** type **`relay.feed.definition.v1`** (2.0 **ViewDefinition**): `sources` + `reduce` + optional `params`. **Reducers** are **versioned** identifiers, **pure** and **deterministic**; v1.4 **requires** **`relay.reduce.chronological.v1`** and **`relay.reduce.reverse_chronological.v1`**; others **§22** / extension registry. | **§11.1**, **§17.10** |
 | **Verifiable feed output** | **Clients (and any honest mirror)** **MUST** be able to **recompute** the feed output from **definition + fetched** logs/state; origin/indexer is **not** a trust root for “correct order” of a feed—**recompute** is **§17.11**. **§11.1** / **§17.10**–**§17.11** **define** a **logical** **recompute** **/** **audit** **boundary** **(advisory** **envelope) ** for **strong** **cross-deployment** **audit** **vs** **“** **latest** **fetched** **”** **local** **UIs. **| **§11.1,** **§17.10,** **§17.11** |
 | **Ecosystem notes (non-normative)** | **Why** these primitives exist (agents, indexer accountability, composability) — **not** a behavioral **MUST**. | **§23.3** |
 
@@ -393,7 +514,9 @@ This document defines the Relay stack in three layers:
 
 ---
 
-## Part I — Wire Protocol + APIs (normative, v1.4; v1.5 optional: **§8.1** `routing_hint`, **§10.5** `expires_at`, **§13.5** private `action.request`; **body** carries v1.2 / v1.3 except where amended)
+## Part I — Truth and View: wire protocol + HTTP APIs (normative, v1.4; v1.5 optional: **§8.1** `routing_hint`, **§10.5** `expires_at`, **§13.5** private `action.request`; **body** carries v1.2 / v1.3 except where amended)
+
+*Relay 2.0* **Part I** specifies how **Identity**, **Event**, **State**, and **ViewDefinition** objects are **signed**, **hashed**, **classed** (**§9**), **transported** over **HTTP** (**§16**–**§17**), and **verified**. The v1-era field names (`prev`, `ts`, state `version`) remain the interoperable **wire**; map them to **Event**/**State** as in **§0.1**.
 
 ### 1. Protocol roles
 
@@ -482,6 +605,7 @@ The following are **REQUIRED** for a canonical serialization:
 
 * UTF-8 encoding
 * object keys sorted **lexicographically** (per Unicode code point, byte-wise where applicable for JSON)
+* **Boundary** **( ** `boundary` ** **objects, ** **§0.6** ** ) **: ** in ** **addition, ** ** follow ** the ** **normative** ** **array** ** and ** **key** ** **conventions** ** in ** **§0.6.1** ** so ** that ** two ** ** semantically** ** **equal** ** **boundaries** ** **hash** ** the ** same **( **on ** **top** ** of ** **this** ** **list** ** ) **. **
 * no insignificant **whitespace** (no variable pretty-printing)
 * **numbers** per **§4.1.1**; **string** text values per **§4.1.2** where they participate in signed/hashed objects
 * the **signature** field (and other designated outer signature fields) **excluded** from the input to `object_id` and signing transforms as specified in this document
@@ -615,11 +739,32 @@ When a state **conflict** is detected (**§5.1**), **clients** **SHOULD**:
 
 ### 6. Trust attestation model (v1.2, normative)
 
+**Relay 2.0** **Truth** **layer** **Attestation** (claim objects) — **MUST** **not** **override** **signed** **Event** / **State** (**§0.2**).
+
+
 #### 6.1 Trust signals are not self-validating
 
 Any **trust signal** (including those embedded in an identity or profile surface) **MUST** be backed by a **verifiable** **Trust Attestation Object** (or a normatively equivalent signed record) when “trust” is asserted in any interoperable way. Bare strings in a profile without a corresponding attestation object are **advisory** only.
 
 #### 6.2 Trust attestation object schema
+
+##### 6.2.0 Relay 2.0 `claim` classification (normative, additive)
+
+For **Relay 2.0** general attestation objects (not limited to the **§6.2** v1.2 example), **`claim` MUST** be structured as:
+
+```json
+"claim": {
+  "category": "trust | snapshot | view",
+  "type": "string",
+  "payload": {}
+}
+```
+
+* **`category` MUST** be present and **MUST** be one of `trust`, `snapshot`, or `view` (see the **Attestation (2.0 sketch)** table in **§0.5**).
+* **Unknown** `type` string values **within** a **known** `category` **MUST** be handled per **extension** policy; **MUST** default to **ignoring** them **safely** (no false verification).
+* **Attestations** **MUST** **not** **override** or **replace** signed **Truth** primitives (**Event**, **State**, **Identity**).
+
+**Mapping from v1.2 (example below):** a verifier **MAY** treat a **v1.2** attestation with top-level `type`, `subject`, and `evidence` as **`claim: { "category": "trust", "type": "<same as type>", "payload": { "subject", "evidence", ... } }`** for 2.0 processing.
 
 A trust attestation is a signed, addressable object. Example:
 
@@ -698,6 +843,9 @@ All transmitted signed objects SHOULD be wrapped in a common envelope.
 * **Agility / downgrade:** a bare change of `"alg": "…"` without a versioned, registered extension (or a **schema** version bump) **MUST** be **rejected** as invalid for v1.2 interop.
 
 ### 8. Identity document schema
+
+**Relay 2.0** **Identity** **primitive** — this section is the **deployed** **HTTP** **/** **JSON** **shape** for **actor** **keys** and **metadata** (**§0.1**).
+
 
 Endpoint:
 
@@ -779,7 +927,8 @@ Schema:
     "identity_base": "https://alice.example/actors/relay:actor:abc/",
     "log_base": "https://alice.example/actors/relay:actor:abc/log/",
     "state_base": "https://alice.example/actors/relay:actor:abc/state/",
-    "relay_ws": ["wss://live.example/ws"]
+    "relay_ws": ["wss://live.example/ws"],
+    "view_run": "https://alice.example/view/{id}/run"
   },
   "limits": {
     "max_publishes_per_minute_per_actor": 60,
@@ -799,6 +948,7 @@ Schema:
 * **`kind`:** **MUST** be `relay.origin.capabilities.v1` for this revision.
 * **`relay_profiles`:** **MUST** be a **superset or exact match** of the **behavior** claimed in the **identity** document’s `relay_profiles` (the identity document is still the **social** source of truth for what the **user** believes they enabled; capabilities **MUST NOT** silently **remove** a profile the identity still claims—use **lower** transport limits only).
 * **`endpoints`:** **MAY** **override** path bases if the operator uses a **CDN** or **split** deployment; clients **MUST** use these bases for **fetch** when present.
+* **`endpoints.view_run` (Relay 2.0, optional):** when **present**, **MUST** be an **HTTPS** **URL** ** **template** ** for ** the ** **2.0** ** **sketch** ** **`GET` `/view/{id}/run`** ** **surface** **( ** **§0.3** **) **. ** The **`{id}` ** **placeholder** **MUST** **denote ** the **`object_id` ** of ** the ** **`relay.feed.definition.v1` ** ** **ViewDefinition** ** **state** ** ( **same ** **`id` ** as ** **§17.5** ** **fetches** **) **. ** **When** **`endpoints.view_run` ** is ** **omitted** **, ** **clients** **MUST** ** **not** ** **assume** ** a ** **server-** **side** ** **view** ** **runner** ** exists** **; ** **use** ** **recompute** **( ** **§17.10** **–** **§17.11** **) ** **only** **. **
 * **`limits` / `policy_url`:** **advisory**; **real** enforcement remains on the origin (`GET /relay/policy`, **Part II**).
 
 * **`supported_action_ids` (v1.4, optional):** **`supported_action_ids` **MAY** be a **JSON** **array** of **zero** **or** **more** **strings,** each **a** **declared **`action_id` **(§13.4) ** the **operator ** ** advertises ** as ** ** supported ** ** on ** this ** ** origin ** or ** ** deployment **. ** Absence ** ** means ** ** no ** ** published ** ** list **; ** it ** ** does ** ** not ** ** imply ** ** the ** ** origin ** ** rejects ** ** other **`action_id` ** values **. ** Relay ** ** core ** ** does ** ** not ** ** require ** a ** ** global ** ** registry ** to ** ** use ** an **`action_id` ** in ** **`action.request` **(see ** ** status ** ** deferred ** ** row) **. ** Profile ** ** documents ** **(§2) ** ** and ** ** extension ** ** specs ** **(§22) ** ** MAY ** ** also ** ** list **`action_id` ** values **; ** ** those ** ** lists ** ** are ** ** likewise ** ** advisory ** ** for ** ** discovery **. **
@@ -816,6 +966,9 @@ Schema:
 **Caching:** clients **SHOULD** cache capabilities with **`ETag`** / **`updated_at`**; **MUST** refresh after **401/403/429** storms or when **identity** `updated_at` advances. **v1.5:** clients **SHOULD** **cache** **`routing_hint` **alongside** the **rest** **of** **the** **capabilities** **document** using **the** **same** **`ETag` **/ **`updated_at` **/ **cache** **invalidation** **rules** **(§8.1) **. **
 
 ### 9. Object classes and storage classes
+
+**Relay 2.0** adds a **classification** **discipline** (`content_class` / `storage_class`) on top of **Event** / **State** (**§10**–**§11**).
+
 
 Every user-visible content object MUST declare both:
 
@@ -858,7 +1011,10 @@ then `storage_class` **MUST** be `dual`. The system **MUST**:
   * **delete** (tombstone / soft delete) → `state.delete`
   * **revoke** (revocable content / key grant) → `state.revoke`
 
-### 10. Log event schema
+### 10. Event primitive — log event schema (v1.4-1 / v1.5 wire; `relay.event.v1` role)
+
+In **Relay 2.0** an **Event** is an **immutable** **signed** **fact** on an actor log. This section is the normative v1 **envelope** (log event); **`prev`** is the v1 spine (often a single parent).
+
 
 A log event is immutable and append-only.
 
@@ -958,7 +1114,10 @@ See also **§5.3** (fork behavior).
 
 * **History** **vs** **active** **availability** **(non-** **normative) **: ** a **time-** **expired** **or** **garbage-** **collected** **envelope** **was** **still** a **valid** **append** **at** **ingestion** **(unless** **rejected** **at** **that** **time) **. ** **Operational** **rules** **govern** **relay, ** **listings, ** **serving, ** **and** **deletion** **(phases** **(B)** **/ ** **(C) **) **, ** not** **whether** a **verifier** **with** **an** **off-** **node** **copy** **can** **check** **hashes** **/ ** **chains. ** **Mirror** **/ ** **origin** **retention** **timing** **MAY** **differ** **without** **breaking** **interop** on **(A) **/ **(B) ** **rules. **
 
-### 11. State object schema
+### 11. State primitive — state object schema (v1.4-1 / v1.5 wire; `relay.state.v1` role)
+
+In **Relay 2.0** **State** is the **authoritative** **current** value of a **versioned** object (posts, feed defs, channels, etc.).
+
 
 A state object is origin-authoritative and versioned.
 
@@ -986,9 +1145,11 @@ A state object is origin-authoritative and versioned.
 
 `created_at`, `updated_at`, and other instants on state objects **MUST** be **RFC 3339** **strings** (**§4.1.1.1**), not Unix epoch integers.
 
-#### 11.1 Feed definition state object (`relay.feed.definition.v1`) (v1.4, normative)
+#### 11.1 ViewDefinition state object (`relay.feed.definition.v1`) (v1.4, normative)
 
-A **portable, signed feed specification** is a **versioned** **state** object of **`type`:** **`relay.feed.definition.v1`**. It is **not** the materialized feed output: it is a **deterministic program** (sources + **reduce** + optional **params**) that honest clients (or an indexer that supports v1.4) **MUST** be able to **recompute** per **§17.10–§17.11**. Feed definitions are **verifiable** artifacts over HTTP like other state objects: publish via **§16**; validate signatures per **§7**; use **§4.1** canonicalization for any **in-document** **hashing** the definition references.
+In **Relay 2.0** this state **`type`** is the **ViewDefinition**: it names **inputs** (`sources`), a pure **reducer** (`reduce`), and parameters (`params`) (**§17.10**). **Normative (Relay 2.0):** the **only** **protocol-level** **ViewDefinition** **representation** **is** **`relay.feed.definition.v1`**; **MUST** **not** use an **alternate** **`type` **or **second** **wire** **shape** for **the** **same** **role** (**§0.3**).
+
+A **portable, signed feed specification** is a **versioned** **state** object of **`type`:** **`relay.feed.definition.v1`**. It is **not** the materialized feed output: it is a **deterministic program** (sources + **reduce** + optional **params**) that honest clients (or an indexer that supports v1.4) **MUST** be able to **recompute** per **§17.10–§17.11**. **Relay 2.0** **unifies** **v1.4-1** “**audit** **/ ** **recompute** **ingredients**” with **the** **normative** **Boundary** object (**§0.6**); **MUST** **read** v1.4-1’s **advisory** **envelope** **below** **together** with **§0.6**–**§0.7** for **2.0** **determinism** **and** **snapshot** **interchange** **( **MUST** **not** **mix** **unpinned** and **snapshot-pinned** **boundaries** **without** **an** **explicit** **proof** **— ** **§0.7** **). **Feed definitions are **verifiable** artifacts over HTTP like other state objects: publish via **§16**; validate signatures per **§7**; use **§4.1** canonicalization for any **in-document** **hashing** the definition references.
 
 **Required keys (in `payload` or top-level, depending on your deployment’s state envelope; v1.4 requires these fields to exist in the state object the origin treats as `relay.feed.definition.v1`—they MAY live under `payload` with `type: relay.feed.definition.v1` at the top level):**
 
@@ -1025,7 +1186,7 @@ A **portable, signed feed specification** is a **versioned** **state** object of
 | `kind` | Required keys | Semantics |
 | --- | --- | --- |
 | `actor_log` | `actor_id` (`relay:actor:…`) | The feed input **MUST** include the **public** **append** **log** for this **actor** (or the union of events the **origin** would return for that log’s `GET` range the client requests under **§17.4**). |
-| `channel` | `channel_id` (`relay:channel:…`) | The feed input **MUST** include **all** `state.commit` and other **durable** log events the definition’s **semantics** require from **posts** in that **channel** as exposed by the **origins** the client can reach (subject to **§13** and **indexer** **policy**; **recompute** **MUST** be **read-only**). |
+| `channel` | `channel_id` (`relay:channel:…`) | The feed input **MUST** include **all** `state.commit` and other **durable** log events the definition’s **semantics** require from **posts** in that **channel** as exposed by the **origins** the client can reach (subject to **§13** and **indexer** **policy**; **recompute** **MUST** be **read-only**). ** **Channel** ** is ** not ** a ** **single** ** **append-** **only** ** **log** **: ** **resolving** ** “ ** **events** ** **in** ** **this** ** **channel** ** ” ** **requires** ** either ** **( ** **1** **) ** a ** **channel** ** **index** **( **e.g. ** ** **indexer**- **or** ** **owner-** **provided** ** **mapping** ** from ** **post** ** **/ ** **commit** ** **to** **`channel_id` **, ** **§17.6** ** **snapshots** **, ** or ** **equivalent** **) **, ** or ** **( ** **2** **) ** **scanning** ** **relevant** ** **actor** ** **logs** ** and ** **filtering** ** by ** **`channel_ref` **/ ** **membership** ** **in** ** the ** **client** **( ** **expensive** **, ** **asymptotic** ** **cost** ** **linear** ** **in** ** **events** ** **scanned** **, ** but ** **verifiable** ** if ** the ** **scan** ** is ** **complete** ** for ** the ** **agreed** ** **boundary** ** ) **. ** **Index** **- ** **backed** ** **expansion** ** is ** **typically** ** **O**(**changed** ** **set** **) **. ** For ** **audit** **, ** a ** **recompute** ** **envelope** **( ** **§11.1** ** **advisory** ** **boundary** **, ** **§17.11** **) ** **SHOULD** ** **record** ** which ** **strategy** ** was ** **used** ** if ** **cross-** **deployment** ** **comparison** ** **matters** **. ** |
 | `feed` | `object_id` (string) | **Logical** `object_id` of a **`relay.feed.definition.v1`** state object (**§11**; e.g. `post:…`). **Not** a **content-addressed** or **immutability** id; **nesting** **does** **not** **pin** a **specific** **definition** **`version`**. **Verifiers** **MUST** **fetch** **that** **state** **via** **§17.5** **at** **recompute** **time** and **fully** **reduce** **the** **nested** **feed** **(§17.10) ** before **applying** **the** **enclosing** **`reduce` **. **The** same **`object_id`**,** **higher** **`version`**,** on **edit** **⇒** a **nested** **recompute** may **legitimately** **differ** **while** the **id** **stays** **fixed** **. |
 
 **MUST NOT (normative):** implementations **MUST NOT** add **v1.4**-required **vector embeddings**, **ML model weights**, or other **unverifiable** **opaque** **blobs** as **required** **fields** in `relay.feed.definition.v1` **core** interop. Extensions **MAY** register optional **`params`** **schemas** in **`registry/`** (**§22**).
@@ -1060,8 +1221,7 @@ A **portable, signed feed specification** is a **versioned** **state** object of
 
 ### 13. Channel schema
 
-**Relay 2.0:** first-class **channels** are represented as **State** (configuration) plus **Event**s for membership; see **§0.1**.
-
+**Relay 2.0:** first-class **channels** are **State** (configuration) plus **Event**s for membership (**§0.1**).
 
 ```json
 {
@@ -1280,7 +1440,10 @@ Deterministic rule set:
 | Action event (v1.4)   | durable_public |           log |       no | mirror indefinitely     | none                       |
 | Feed definition (v1.4) | mutable_public |         state |      yes | mirror latest           | origin update, supersession |
 
-### 16. Publication APIs
+### 16. Publication APIs (Truth layer — append **Event**; publish **State**)
+
+**2.0** **mapping:** `POST` log = append **Event**; `PUT` state = publish or revise **State**.
+
 
 #### 16.1 Publish state object
 
@@ -1343,7 +1506,10 @@ Response:
 }
 ```
 
-### 17. Fetch APIs
+### 17. Fetch APIs (Truth layer fetches; **View** in §17.10–11)
+
+**2.0** **mapping:** log fetches return **Event** envelopes; state fetches return **State**. Deterministic feeds (**View**) are defined in **§11.1** and evaluated per **§17.10**–**§17.11** (no separate `GET` for the view in core).
+
 
 #### 17.1 Identity
 
@@ -1440,7 +1606,10 @@ Indexers influence **discovery** and ranking; clients **SHOULD** be able to fetc
 
 These endpoints are **advisory** for transparency; they do **not** create a **global** ranking—clients **MUST** still treat Indexers as one input (**§1**, **§23.2**).
 
-#### 17.10 Feed definitions and reduction functions (v1.4, normative)
+#### 17.10 View layer — feed definitions and reduction functions (v1.4, normative)
+
+**Relay 2.0** name: this is the **View** **engine** — reducers are versioned pure functions over **bounded** inputs (**§0.3**).
+
 
 A **feed** in v1.4 is a **pure function** of (a) a **`relay.feed.definition.v1` state object** and (b) the **set** of **log events** and **state objects** the **recomputer** can **obtain** by **read-only** **HTTP** **fetch** from **authoritative** or **cached** **sources** per **§17**—**not** a **trusted** **opaque** list from a **single** **indexer** unless the **client** **chooses** to **treat** it as **advisory** only.
 
@@ -1455,6 +1624,8 @@ A **feed** in v1.4 is a **pure function** of (a) a **`relay.feed.definition.v1` 
 * **`relay.reduce.chronological.v1`:** **inputs:** the **expansion** of **§11.1** **`sources`**, each yielding a **set** of **`relay:event:…` references** the client has **fetched** (with their **log event** bodies), plus **relevant** **state** objects the **reducer** **requires** to **interpret** **commits**; **output:** a **totally** **ordered** **list** of **event** **ids** (duplicates **removed**), **earliest** **first** by **( `ts` **RFC 3339** string, then **`event_id` lexicographic** **tie**-**break**)**. **MUST** **only** use **signed** `ts` from **events**; **MUST** **not** **introduce** a **new** **global** **clock** or **consensus** **layer**.
 * **`relay.reduce.reverse_chronological.v1`:** **identical** **inputs**; **output** is **`relay.reduce.chronological.v1` followed by** **reversing** the **final** list.
 
+**Multiple** **heads** **on** **a** **source** **log** **( **forks, ** **normative** **) **: ** When ** a ** **source** ** is ** an **`actor_log`** **( **or** ** **equivalent** **) ** and ** the ** **log** ** as ** **fetched** ** ( **or** ** **served** ** by ** the ** **origin** **) ** has ** more ** than ** one ** **head** ** event **( **a ** **fork** **) **, **a** ** **deterministic** ** **reducer** **MUST** ** **either: **( **1** )** **reject** ** the ** **input** ** as ** **ambiguous** **( **e.g. ** **treat** ** the ** **recompute** ** as ** **not** ** **fully** ** **verifiable** ** for ** that ** **input** ** set** **) **, **or** **( **2** )** **select** ** exactly ** one ** head ** per ** a ** **documented** ** **policy** **( **e.g. ** **longest** ** **valid** **`prev` ** **chain** **, ** most ** **recent** ** **signed** **`ts` **, ** **or** ** **an** ** **origin-** ** **declared** ** **`head` **) **. ** The ** **policy** **MUST** ** be ** **documented** ** in **`params`** **on** ** the **`relay.feed.definition.v1`** ** **state** ** and/or** ** the ** **implementation** ** **spec** ** for ** that ** **`reduce` ** **id. ** The ** **protocol** ** does ** not ** **mandate** ** a ** **single** ** **global** ** **fork**-** ** **resolution** ** **rule. **( ** **See** ** also ** **§0.6** **.) **
+
 *Non-normative (UX):* **Lexicographic** `event_id` **tie**-**break** is over the **full** string (constant **`relay:event:`** **prefix** **plus** **hex**); **it** is **deterministic** and **functionally** **equivalent** to **sorting** the **event** **hash** **bytes** **alone**. **Equal** `ts` **strings** from **different** **actors** are **not** a **“simultaneous** **moment**” in **any** **physical** **sense**—the **reducer** **imposes** an **arbitrary** **but** **reproducible** **order** **via** `event_id`. **UIs** **SHOULD** **not** **present** **that** **order** as **“events** **at** **the** **same** **instant**” **without** **additional** **context** (e.g. **per-actor** **subordering** or **labelling** that the **order** is **spec-defined**, **not** **wall**-**clock** **resolution**). **This** is **not** a **protocol** **defect;** it **avoids** **false** **precision** from **comparing** **RFC 3339** **strings** with **1-second** (or **coarser)** **granularity** **across** **independent** **signers** **.**
 
 **Nested `kind: "feed"` sources (§11.1), normative composition:** When a **source** **descriptor** **`kind: "feed"`** **names** the **`object_id`** of **another** **`relay.feed.definition.v1`**, **v1.4** **MUST** **fetch** **that** **nested** **definition**’s **state** **per** **§17.5** **at** **recompute** **time** and **MUST** **use** the **fetched** **object**’s **own** **`reduce`** and **`params`** to **materialize** that **nested** **definition** **into** an **ordered** **(or** **projected**)** **event** **list** **per** **that** **reducer**’s **specification** **. **A** **nested** **feed** **MUST** be **fully** **reduced** **(expanded** to **its** **output** **per** its **own** **definition) ** before **the** **enclosing** **feed**’**s** **`reduce`** is **applied** **;** this **order** **is** **not** **optional** **for** **audit** **: **an **outer** **recompute** **MUST** **not** **observe** **raw** **`kind: "feed"`** **source** **descriptors** **as** **if** they **were** **event** **streams. **Implementations** **MUST** **not** **merge** **unexpanded** **nested** **feed** **pointers** **(raw** **`kind: "feed"`** **source** **descriptors) ** with **sibling** **lists** or **treat** **them** **as** **if** they **were** **already** **chronological** **event** **streams** **. A** **later** **recompute** **at** **the** **same** **`object_id`** **may** **see** a **higher** **`version`**,** **so** **nested** **sourcing** **is** a **logical** **pointer** to **mutable** **state,** **not** a **content-addressed** **snapshot** of **one** **definition** **revision** **. The** **enclosing** **definition**’s **`reduce`** **then** **MUST** **merge** **that** **(fully** **reduced) ** **list** with **sibling** **sources** **according** to **the** **enclosing** **reducer** (for **`relay.reduce.chronological.v1`**, the **outer** **merge** is **the** **union** **chronological** **sort** **in** **§17.10**). If **both** use **the** **same** **`reduce` string** **and** **compatible** **params** **semantics**, **behavior** **matches** the **“** **single** **feed**”** case; **if** the **nested** **`reduce` differs** from the **outer** **`reduce`**, the **nested** **value** **governs** **only** **the** **subtree**—**v1.4** **does** **not** **redefine** **either** **reducer**; **it** **only** **requires** that **implementations** **not** **silently** **drop** the **distinction**. A **future** **revision** or **`registry/`** **entry** **MAY** add **tighter** **merge** **rules** for **specific** **(outer,** **inner)** **pairs**. **When** **documenting** **a** **recompute** **boundary** **(§11.1) **, **a** **`source_heads` **entry** **for** **`kind: "feed"`** **SHOULD** **capture** **the** **nested** **definition** **`version`** **and** **a** **cursor** **sufficient** **to** **replay** **the** **inner** **reduction** **(e.g. ** **last** **event** **id** **in** **the** **inner** **list) ** **so** **the** **enclosing** **audit** **is** **complete** **. **
@@ -1463,7 +1634,10 @@ A **feed** in v1.4 is a **pure function** of (a) a **`relay.feed.definition.v1` 
 
 **Additional reducers:** **MUST** be **registered** with **types**, **`params`**, and **merge** **semantics** in **`registry/`** and/or **cited** from **extension** **documents** (**§22**). **MUST** be **deterministic** and **versioned**; **MUST** **not** require **out-of-band** **mutable** **global** state as a **MUST** in **core** (only **fetched** **signed** **artifacts** and **`params` bytes** in the **definition** state).
 
-#### 17.11 Feed output verification (v1.4, normative)
+#### 17.11 View layer — feed output verification (v1.4, normative)
+
+**Relay 2.0:** client-side (or indexer) **recompute** verifies a **View** over an agreed **boundary**; the origin does not solely define “correct” order for audit claims (**§0.2**–**§0.3**).
+
 
 **Clients and mirrors MUST:**
 
@@ -1894,7 +2068,10 @@ The same **ignore-unknown** and **round-trip** discipline applies to **top-level
 
 ---
 
-## Part II — Reference Server + Relay Implementation (non-normative reference)
+## Part II — Reference server + relay implementation (non-normative reference)
+
+*Relay 2.0* **roles** (Actor Origin, Feed Host, Fast Relay, Mirror, Indexer) implement Truth transport and View materialization in a concrete deployment (**§1** with Part I below).
+
 
 ### 24. Deployment topology
 
@@ -1914,6 +2091,8 @@ Reference implementation is split into three services plus optional extras:
    * search, channel aggregation, and discovery views; expose **§17.9** (`GET /indexer/policy`, `GET /indexer/sources`) when offering an Indexer so clients can inspect **ranking inputs**
 
 A small install may run Origin API + Static Feed Host + Fast Relay in one process.
+
+**Snapshot** **emission** **cadence** **( ** **non-** **normative, ** **operational** **) **: ** **Part** ** I ** does ** not ** **prescribe** ** **when** ** **origins** ** **MUST** ** **create** **`relay.snapshot.v1`** ** **objects. ** **Typical** ** **policies** ** **include** ** **time-** ** **based** ** **schedules,** ** **after** ** **large** ** **ingests** **, ** **before** ** **expensive** ** **queries,** ** **or** ** **never** **( ** **relying** ** **on** ** **on-** ** **demand** ** **state** ** **fetches** ** **and** ** **Views** ** **only** ** ) **. ** **Publish** ** **SLOs** ** **or** ** **runbooks** ** **for** ** **auditors** ** **where** ** **strong** ** **snapshot-** ** **backed** ** **claims** ** **matter** **. **
 
 ### 25. Recommended stack
 
@@ -2194,7 +2373,10 @@ This allows pure P2P survival mode without making it the primary UX path.
 
 ---
 
-## Part III — Client Architecture (non-normative reference)
+## Part III — Client architecture (non-normative reference)
+
+*Relay 2.0* clients **materialize** **Views** by fetching **Event** / **State** per Part I and optionally recomputing feeds (**§17.10**–**§17.11**).
+
 
 ### 36. Client goals
 
