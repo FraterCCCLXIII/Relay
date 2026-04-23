@@ -1,0 +1,35 @@
+{
+  "name": "@relay-mvp/reference-runtime",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./sqlite-storage": {
+      "types": "./dist/sqlite-storage.d.ts",
+      "import": "./dist/sqlite-storage.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@relay-mvp/protocol": "workspace:*",
+    "@relay-mvp/relay": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "better-sqlite3": "^11.8.1",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.4"
+  },
+  "optionalDependencies": {
+    "better-sqlite3": "^11.8.1"
+  }
+}

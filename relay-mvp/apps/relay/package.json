@@ -1,5 +1,5 @@
 {
-  "name": "@relay-mvp/relay",
+  "name": "@relay-mvp/relay-ws",
   "version": "0.1.0",
   "type": "module",
   "scripts": {
