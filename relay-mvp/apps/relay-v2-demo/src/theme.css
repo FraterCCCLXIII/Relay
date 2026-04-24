@@ -1,0 +1,99 @@
+/* Design tokens: light by default, class .dark for dark mode (optional) */
+:root {
+  --color-bg: #0f1419;
+  --color-surface: #1a1f26;
+  --color-elevated: #242c36;
+  --color-border: #38444d;
+  --color-text: #e7e9ea;
+  --color-text-muted: #8b98a5;
+  --color-accent: #1d9bf0;
+  --color-accent-hover: #1a8cd8;
+  --color-like: #f4212e;
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-lg: 16px;
+  --space-xl: 24px;
+  --radius: 8px;
+  --radius-pill: 9999px;
+  --line: 1.4;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  font-family: var(--font-sans);
+  line-height: var(--line);
+  color: var(--color-text);
+  background: var(--color-bg);
+}
+
+#root {
+  min-height: 100vh;
+}
+
+code {
+  font-size: 0.85em;
+  color: var(--color-text-muted);
+}
+
+a {
+  color: var(--color-accent);
+}
+
+input,
+textarea,
+select,
+button {
+  font: inherit;
+}
+
+input,
+textarea,
+select {
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: var(--space-sm) var(--space-md);
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  border-radius: var(--radius-pill);
+  padding: var(--space-sm) var(--space-lg);
+  font-weight: 600;
+  background: var(--color-accent);
+  color: #fff;
+}
+
+button:hover {
+  background: var(--color-accent-hover);
+}
+
+button.ghost {
+  background: transparent;
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+}
+
+button.ghost:hover {
+  background: var(--color-elevated);
+}
+
+button.like {
+  background: transparent;
+  color: var(--color-like);
+  border: 1px solid var(--color-border);
+}
+
+button.like:hover {
+  background: color-mix(in srgb, var(--color-like) 12%, transparent);
+}

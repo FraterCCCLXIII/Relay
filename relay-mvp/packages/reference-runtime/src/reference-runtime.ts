@@ -11,7 +11,9 @@ import {
   merkleRootFromStates,
   merkleProofForIndex,
   assertValidEventId,
+  assertValidStateId,
   verifyEventSignature,
+  verifyStateSignature,
   sign,
   verifySnapshotProof,
   type BoundaryV2,
@@ -31,7 +33,18 @@ export class ReferenceRuntime {
   constructor(
     private readonly store: ReferenceStorage,
     private readonly identity: Ed25519Identity
-  ) {}
+  ) {
+    this.registerIdentity(identity);
+  }
+
+  /** Register an actor’s Ed25519 public key so this runtime can verify their events and states. */
+  registerIdentity(id: Ed25519Identity): void {
+    this.store.registerPublicKey(id.actor_id, id.publicKey);
+  }
+
+  listKnownActors(): string[] {
+    return this.store.listRegisteredActorIds();
+  }
 
   get storage(): ReferenceStorage {
     return this.store;
@@ -42,11 +55,10 @@ export class ReferenceRuntime {
    */
   appendEvent(ev: RelayEventV1): void {
     assertValidEventId(ev);
-    if (!verifyEventSignature(ev, this.identity.publicKey)) {
+    const pk = this.store.getPublicKey(ev.actor);
+    if (!pk) throw new Error("actor_not_registered");
+    if (!verifyEventSignature(ev, pk)) {
       throw new Error("event_signature_invalid");
-    }
-    if (ev.actor !== this.identity.actor_id) {
-      throw new Error("event_actor_mismatch");
     }
     const head = this.store.getActorHead(ev.actor);
     if (ev.prev !== head) {
@@ -57,6 +69,12 @@ export class ReferenceRuntime {
   }
 
   putState(s: RelayStateV1): void {
+    assertValidStateId(s);
+    const pk = this.store.getPublicKey(s.actor);
+    if (!pk) throw new Error("actor_not_registered");
+    if (!verifyStateSignature(s, pk)) {
+      throw new Error("state_signature_invalid");
+    }
     this.store.putState(s);
   }
 
@@ -91,6 +109,28 @@ export class ReferenceRuntime {
         }
       ]
     };
+    if (extraScope) b.state_scope = extraScope;
+    return b;
+  }
+
+  /**
+   * Closed boundary over the last at most `n` events per listed actor (§0.6.1), merged for reduce.
+   * Omits actors with an empty log.
+   */
+  latestClosedEventWindowForActors(actors: string[], n: number, extraScope?: BoundaryV2["state_scope"]): BoundaryV2 | null {
+    const ranges: NonNullable<BoundaryV2["event_ranges"]> = [];
+    for (const actor of actors) {
+      const log = this.forwardLog(actor);
+      if (log.length === 0) continue;
+      const slice = log.slice(-Math.min(n, log.length));
+      ranges.push({
+        actor,
+        from: slice[0]!.id,
+        to: slice[slice.length - 1]!.id
+      });
+    }
+    if (ranges.length === 0) return null;
+    const b: BoundaryV2 = { event_ranges: ranges };
     if (extraScope) b.state_scope = extraScope;
     return b;
   }

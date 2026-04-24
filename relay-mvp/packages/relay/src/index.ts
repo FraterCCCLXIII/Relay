@@ -13,3 +13,4 @@ export * from "./ids.js";
 export * from "./event.js";
 export * from "./state.js";
 export * from "./bytes.js";
+export * from "./social.js";

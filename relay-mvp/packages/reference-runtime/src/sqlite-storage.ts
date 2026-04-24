@@ -15,11 +15,32 @@ export class SqliteStorage implements ReferenceStorage {
       CREATE TABLE IF NOT EXISTS actor_heads (actor TEXT PRIMARY KEY, head TEXT);
       CREATE TABLE IF NOT EXISTS states (id TEXT PRIMARY KEY, json TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS snapshots (id TEXT PRIMARY KEY, json TEXT NOT NULL, members_json TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS actor_keys (actor TEXT PRIMARY KEY, public_key BLOB NOT NULL);
     `);
   }
 
   close(): void {
     this.db.close();
+  }
+
+  registerPublicKey(actorId: string, publicKey: Uint8Array): void {
+    this.db
+      .prepare("INSERT OR REPLACE INTO actor_keys (actor, public_key) VALUES (?, ?)")
+      .run(actorId, Buffer.from(publicKey));
+  }
+
+  getPublicKey(actorId: string): Uint8Array | undefined {
+    const row = this.db
+      .prepare("SELECT public_key FROM actor_keys WHERE actor = ?")
+      .get(actorId) as { public_key: Buffer } | undefined;
+    if (!row) return undefined;
+    return new Uint8Array(row.public_key);
+  }
+
+  listRegisteredActorIds(): string[] {
+    return (this.db.prepare("SELECT actor FROM actor_keys ORDER BY actor").all() as { actor: string }[]).map(
+      (r) => r.actor
+    );
   }
 
   putEvent(ev: RelayEventV1): void {
@@ -29,6 +50,12 @@ export class SqliteStorage implements ReferenceStorage {
   getEvent(id: string): RelayEventV1 | undefined {
     const row = this.db.prepare("SELECT json FROM events WHERE id = ?").get(id) as { json: string } | undefined;
     return row ? (JSON.parse(row.json) as RelayEventV1) : undefined;
+  }
+
+  listAllEvents(): RelayEventV1[] {
+    return (this.db.prepare("SELECT json FROM events").all() as { json: string }[]).map(
+      (r) => JSON.parse(r.json) as RelayEventV1
+    );
   }
 
   listEventsByActor(actor: string): RelayEventV1[] {

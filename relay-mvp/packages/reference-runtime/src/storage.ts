@@ -4,8 +4,16 @@
 import type { RelayEventV1, RelaySnapshotV1, RelayStateV1 } from "@relay-mvp/relay";
 
 export interface ReferenceStorage {
+  /** Ed25519 public key for an actor; required before accepting signed events or states for that actor. */
+  registerPublicKey(actorId: string, publicKey: Uint8Array): void;
+  getPublicKey(actorId: string): Uint8Array | undefined;
+  /** All actors with a registered public key (e.g. for feed sources). */
+  listRegisteredActorIds(): string[];
+
   putEvent(ev: RelayEventV1): void;
   getEvent(id: string): RelayEventV1 | undefined;
+  /** All events in the store (e.g. like aggregation; demo / indexes). */
+  listAllEvents(): RelayEventV1[];
   /** All events for an actor (for fork scan). */
   listEventsByActor(actor: string): RelayEventV1[];
 

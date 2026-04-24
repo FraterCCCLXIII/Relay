@@ -2,10 +2,23 @@ import type { RelayEventV1, RelaySnapshotV1, RelayStateV1 } from "@relay-mvp/rel
 import type { ReferenceStorage } from "./storage.js";
 
 export class MemoryStorage implements ReferenceStorage {
+  private readonly publicKeys = new Map<string, Uint8Array>();
   private readonly events = new Map<string, RelayEventV1>();
   private readonly heads = new Map<string, string | null>();
   private readonly states = new Map<string, RelayStateV1>();
   private readonly snapshots = new Map<string, { meta: RelaySnapshotV1; members: RelayStateV1[] }>();
+
+  registerPublicKey(actorId: string, publicKey: Uint8Array): void {
+    this.publicKeys.set(actorId, publicKey);
+  }
+
+  getPublicKey(actorId: string): Uint8Array | undefined {
+    return this.publicKeys.get(actorId);
+  }
+
+  listRegisteredActorIds(): string[] {
+    return [...this.publicKeys.keys()].sort();
+  }
 
   putEvent(ev: RelayEventV1): void {
     this.events.set(ev.id, ev);
@@ -13,6 +26,10 @@ export class MemoryStorage implements ReferenceStorage {
 
   getEvent(id: string): RelayEventV1 | undefined {
     return this.events.get(id);
+  }
+
+  listAllEvents(): RelayEventV1[] {
+    return [...this.events.values()];
   }
 
   listEventsByActor(actor: string): RelayEventV1[] {
